@@ -12,6 +12,96 @@ use crate::classes::TryFromUnityValue;
 pub fn is_unity_bundle(data: &[u8]) -> bool {
     data.starts_with(b"UnityFS") || data.starts_with(b"UnityWeb") || data.starts_with(b"UnityRaw")
 }
+fn find_and_extract_criware_bytes_lib(
+    value: &UnityValue,
+    output_dir: &Path,
+    base_name: &str,
+    parent_key: &str,
+    extracted_files: &mut Vec<PathBuf>,
+) {
+    match value {
+        UnityValue::Bytes(bytes) => {
+            if bytes.len() > 16 {
+                let header = &bytes[..std::cmp::min(16, bytes.len())];
+                let mut ext = None;
+                if header.starts_with(b"@UTF") {
+                    ext = Some("acb");
+                } else if header.starts_with(b"AFS2") || header.starts_with(b"AWBP") {
+                    ext = Some("awb");
+                } else if header.starts_with(b"CPK ") {
+                    ext = Some("cpk");
+                } else if header.starts_with(b"RIFF") {
+                    ext = Some("wav");
+                } else if header.starts_with(b"OggS") {
+                    ext = Some("ogg");
+                } else if header.len() >= 8 && &header[4..8] == b"ftyp" {
+                    ext = Some("m4a");
+                }
+                if let Some(extension) = ext {
+                    let filename = if parent_key.is_empty() {
+                        format!("{}.{}", base_name, extension)
+                    } else {
+                        format!("{}_{}.{}", base_name, parent_key, extension)
+                    };
+                    let cri_dir = output_dir.join("CriWare");
+                    let _ = std::fs::create_dir_all(&cri_dir);
+                    let dest = cri_dir.join(filename);
+                    if let Ok(mut f) = File::create(&dest) {
+                        if f.write_all(bytes).is_ok() {
+                            extracted_files.push(dest);
+                        }
+                    }
+                }
+            }
+        }
+        UnityValue::Array(arr) => {
+            if !arr.is_empty() && arr.len() > 16 {
+                let mut bytes = Vec::with_capacity(arr.len());
+                let mut is_byte_array = true;
+                for item in arr {
+                    match item {
+                        UnityValue::UInt8(b) => bytes.push(*b),
+                        UnityValue::Int8(b) => bytes.push(*b as u8),
+                        UnityValue::UInt16(b) => bytes.push(*b as u8),
+                        UnityValue::Int16(b) => bytes.push(*b as u8),
+                        UnityValue::UInt32(b) => bytes.push(*b as u8),
+                        UnityValue::Int32(b) => bytes.push(*b as u8),
+                        UnityValue::UInt64(b) => bytes.push(*b as u8),
+                        UnityValue::Int64(b) => bytes.push(*b as u8),
+                        _ => {
+                            is_byte_array = false;
+                            break;
+                        }
+                    }
+                }
+                if is_byte_array {
+                    find_and_extract_criware_bytes_lib(&UnityValue::Bytes(bytes), output_dir, base_name, parent_key, extracted_files);
+                    return;
+                }
+            }
+
+            for (idx, item) in arr.iter().enumerate() {
+                let item_key = if parent_key.is_empty() {
+                    idx.to_string()
+                } else {
+                    format!("{}_{}", parent_key, idx)
+                };
+                find_and_extract_criware_bytes_lib(item, output_dir, base_name, &item_key, extracted_files);
+            }
+        }
+        UnityValue::Map(map) => {
+            for (k, v) in map {
+                let item_key = if parent_key.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{}_{}", parent_key, k)
+                };
+                find_and_extract_criware_bytes_lib(v, output_dir, base_name, &item_key, extracted_files);
+            }
+        }
+        _ => {}
+    }
+}
 pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: &[u8]) -> Option<Vec<u8>> {
     let (block_w, block_h) = match format {
         10 | 11 | 12 | 24 | 25 | 26 | 27 | 34 | 35 | 36 | 41 | 42 | 43 | 44 | 45 | 46 | 47 => (4, 4),
@@ -345,6 +435,9 @@ fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Resul
                 continue;
             }
             if class_id == 49 || class_id == 114 {
+                if class_id == 114 {
+                    find_and_extract_criware_bytes_lib(&value, out_dir, &sanitized_base, "", &mut extracted_files);
+                }
                 let mut content = None;
                 let mut is_cubism_fade_motion = false;
                 let mut is_cubism_expression = false;
