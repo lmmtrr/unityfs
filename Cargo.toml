@@ -1,6 +1,6 @@
 [package]
 name = "unityfs"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A pure Rust library for parsing, reading, and extracting assets from Unity serialized files and AssetBundles"
 license = "MIT"

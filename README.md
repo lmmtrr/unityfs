@@ -8,7 +8,7 @@ Add `unityfs` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-unityfs = "0.1.0"
+unityfs = "0.1.1"
 ```
 
 Then you can read asset bundles and extract assets programmatically:
