@@ -4,6 +4,7 @@ pub mod value;
 pub mod typetree;
 pub mod serializedfile;
 pub mod fallback_typetree;
+pub mod typetree_db;
 pub mod objectreader;
 pub mod math;
 pub mod bundle;

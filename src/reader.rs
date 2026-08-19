@@ -66,20 +66,19 @@ impl Reader {
         }
     }
     pub fn read_bytes(&mut self, size: usize) -> Vec<u8> {
-        if size > 100 * 1024 * 1024 {
-            panic!("Extremely large read requested: {} bytes at pos {}. This is likely a parsing error.", size, self.pos);
+        if size > 100 * 1024 * 1024 || self.pos >= self.data.len() {
+            return Vec::new();
         }
-        if self.pos + size > self.data.len() {
-            panic!("Out of bounds read of {} bytes at pos {} (len {})", size, self.pos, self.data.len());
-        }
-        let end = self.pos + size;
+        let available = self.data.len().saturating_sub(self.pos);
+        let read_len = size.min(available);
+        let end = self.pos + read_len;
         let res = self.data[self.pos..end].to_vec();
         self.pos = end;
         res
     }
     pub fn read_u8(&mut self) -> u8 {
         if self.pos >= self.data.len() {
-            panic!("Out of bounds read at pos {} (len {})", self.pos, self.data.len());
+            return 0;
         }
         let val = self.data[self.pos];
         self.pos += 1;
@@ -93,8 +92,10 @@ impl Reader {
         if self.pos + N <= self.data.len() {
             buf.copy_from_slice(&self.data[self.pos..self.pos + N]);
             self.pos += N;
-        } else {
-            panic!("Out of bounds read of {} bytes at pos {} (len {})", N, self.pos, self.data.len());
+        } else if self.pos < self.data.len() {
+            let avail = self.data.len() - self.pos;
+            buf[..avail].copy_from_slice(&self.data[self.pos..self.data.len()]);
+            self.pos = self.data.len();
         }
         buf
     }

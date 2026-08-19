@@ -89,6 +89,14 @@ impl TryFromUnityValue for TypelessData {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
             UnityValue::Bytes(b) => Ok(TypelessData(b.clone())),
+            UnityValue::Map(m) => {
+                if let Some(v) = m.get("data").or_else(|| m.get("m_Data")) {
+                    if let UnityValue::Bytes(b) = v {
+                        return Ok(TypelessData(b.clone()));
+                    }
+                }
+                Err("Expected Bytes in TypelessData Map".to_string())
+            }
             _ => Err("Expected Bytes (TypelessData)".to_string()),
         }
     }

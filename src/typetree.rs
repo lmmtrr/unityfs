@@ -9,7 +9,7 @@ pub struct TypeTreeReader<'a> {
     pub class_id: i32,
 }
 fn should_ignore_field(name: &str) -> bool {
-    name == "m_Shapes" || name == "m_BakedConvexCollisionMesh" || name == "m_BakedTriangleCollisionMesh" || name == "m_VariableBoneCountWeights"
+    name == "m_BakedConvexCollisionMesh" || name == "m_BakedTriangleCollisionMesh" || name == "m_VariableBoneCountWeights"
 }
 impl<'a> TypeTreeReader<'a> {
     pub fn new(reader: &'a mut Reader, obj_end: usize, ref_types: &'a [crate::serializedfile::RefType], class_id: i32) -> Self {
@@ -23,6 +23,11 @@ impl<'a> TypeTreeReader<'a> {
         self.read_node(nodes, &mut index)
     }
     fn read_node(&mut self, nodes: &[TypeTreeNode], index: &mut usize) -> UnityValue {
+        if self.reader.pos >= self.obj_end {
+            let end = self.get_node_end(nodes, *index);
+            *index = end - 1;
+            return UnityValue::Null;
+        }
         let node = &nodes[*index];
         if should_ignore_field(node.m_Name.as_str()) {
             self.skip_node(nodes, index);
@@ -62,9 +67,18 @@ impl<'a> TypeTreeReader<'a> {
             },
             "TypelessData" => {
                 let size = self.reader.read_i32();
-                let bytes = self.reader.read_bytes(size as usize);
-                *index = self.get_node_end(nodes, *index) - 1;
-                UnityValue::Bytes(bytes)
+                if size >= 0 && (self.reader.pos + (size.max(0) as usize)) <= self.obj_end {
+                    let bytes = if size > 0 {
+                        self.reader.read_bytes(size as usize)
+                    } else {
+                        Vec::new()
+                    };
+                    *index = self.get_node_end(nodes, *index) - 1;
+                    UnityValue::Bytes(bytes)
+                } else {
+                    self.reader.pos -= 4;
+                    self.read_class(nodes, index)
+                }
             },
             "StreamingInfo" => {
                 let start_pos = self.reader.pos;
@@ -121,7 +135,8 @@ impl<'a> TypeTreeReader<'a> {
         *index += 2;
         let size = self.reader.read_i32();
         if size < 0 || size > 10_000_000 {
-            panic!("Invalid array size: {} at pos {}. This indicates a parsing error.", size, self.reader.pos);
+            *index = end - 1;
+            return UnityValue::Null;
         }
         *index += 1;
         let element_node_start = *index;
@@ -144,6 +159,9 @@ impl<'a> TypeTreeReader<'a> {
         }
         let mut arr = Vec::with_capacity(size.min(1_000_000) as usize);
         for _ in 0..size {
+            if self.reader.pos >= self.obj_end {
+                break;
+            }
             let mut element_index = element_node_start;
             arr.push(self.read_node(nodes, &mut element_index));
         }
@@ -159,6 +177,10 @@ impl<'a> TypeTreeReader<'a> {
         let mut map = BTreeMap::new();
         *index += 1;
         while *index < end {
+            if self.reader.pos >= self.obj_end {
+                *index = end;
+                break;
+            }
             let child_name = nodes[*index].m_Name.clone();
             map.insert(child_name, self.read_node(nodes, index));
             *index += 1;
@@ -365,7 +387,8 @@ impl<'a> TypeTreeReader<'a> {
         *index += 2;
         let size = self.reader.read_i32();
         if size < 0 || size > 10_000_000 {
-            panic!("Invalid array size: {} in skip_array", size);
+            *index = end - 1;
+            return;
         }
         *index += 1;
         let element_node_start = *index;

@@ -357,7 +357,7 @@ impl SerializedFile {
             if let Some(cached_nodes) = local_fallback_cache.get(&class_id) {
                 nodes = cached_nodes.clone();
             } else {
-                let mut raw_nodes = crate::fallback_typetree::get_fallback_nodes(class_id);
+                let mut raw_nodes = crate::fallback_typetree::get_fallback_nodes(class_id, &reader.unity_version);
                 if class_id == 43 && reader.unity_version < (2019, 1) {
                     let mut filtered = Vec::new();
                     let mut skip_until_level_1 = false;
