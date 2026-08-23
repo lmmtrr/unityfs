@@ -1,8 +1,7 @@
 import os
 import json
 from collections import defaultdict
-from UnityPy.helpers.Tpk import get_typetree_node
-from UnityPy.helpers.UnityVersion import UnityVersion
+from UnityPy.helpers.Tpk import get_typetree, generate_node
 
 CLASS_IDS = [
     1,
@@ -31,22 +30,6 @@ CLASS_IDS = [
     225,
     329,
 ]
-VERSIONS = [
-    ((2017, 1), "2017.1.0f1"),
-    ((2017, 4), "2017.4.0f1"),
-    ((2018, 1), "2018.1.0f1"),
-    ((2018, 4), "2018.4.0f1"),
-    ((2019, 1), "2019.1.0f1"),
-    ((2019, 4), "2019.4.0f1"),
-    ((2020, 1), "2020.1.0f1"),
-    ((2020, 3), "2020.3.0f1"),
-    ((2021, 1), "2021.1.0f1"),
-    ((2021, 2), "2021.2.0f1"),
-    ((2021, 3), "2021.3.0f1"),
-    ((2022, 1), "2022.1.0f1"),
-    ((2022, 2), "2022.2.0f1"),
-    ((2022, 3), "2022.3.0f1"),
-]
 
 
 def flatten_tree(node, nodes_list):
@@ -67,18 +50,30 @@ def flatten_tree(node, nodes_list):
 
 
 def main():
+    tpk = get_typetree()
+    class_information = tpk.ClassInformation
     db = defaultdict(list)
     for class_id in CLASS_IDS:
+        ci = class_information.get(class_id)
+        if not ci:
+            continue
+        by_minor = {}
+        order = []
+        for version, class_info in ci:
+            key = (version.major, version.minor)
+            if key not in by_minor:
+                order.append(key)
+            by_minor[key] = class_info
         version_trees = {}
-        for (major, minor), ver_str in VERSIONS:
+        for key in order:
+            class_info = by_minor[key]
             try:
-                ver = UnityVersion.from_str(ver_str)
-                root = get_typetree_node(class_id, ver)
-                nodes = []
-                flatten_tree(root, nodes)
-                version_trees[(major, minor)] = tuple(nodes)
+                root = generate_node(class_info)
             except Exception:
-                pass
+                continue
+            nodes = []
+            flatten_tree(root, nodes)
+            version_trees[key] = tuple(nodes)
         if not version_trees:
             continue
         sorted_vers = sorted(version_trees.keys())
@@ -133,8 +128,9 @@ def main():
     array_definitions = []
     entries = []
     for class_id in sorted(db.keys()):
+        class_entries = db[class_id]
         for idx_entry, ((min_maj, min_min), (max_maj, max_min), tree) in enumerate(
-            db[class_id]
+            class_entries
         ):
             array_name = f"NODES_{class_id}_{min_maj}_{min_min}_TO_{max_maj}_{max_min}"
             array_lines = [f"static {array_name}: &[StaticTypeTreeNode] = &[\n"]
@@ -147,10 +143,12 @@ def main():
                 )
             array_lines.append("];\n\n")
             array_definitions.append("".join(array_lines))
-            min_maj_val = 0 if (min_maj, min_min) == VERSIONS[0][0] else min_maj
-            min_min_val = 0 if (min_maj, min_min) == VERSIONS[0][0] else min_min
-            max_maj_val = 65535 if (max_maj, max_min) == VERSIONS[-1][0] else max_maj
-            max_min_val = 65535 if (max_maj, max_min) == VERSIONS[-1][0] else max_min
+            is_first = idx_entry == 0
+            is_last = idx_entry == len(class_entries) - 1
+            min_maj_val = 0 if is_first else min_maj
+            min_min_val = 0 if is_first else min_min
+            max_maj_val = 65535 if is_last else max_maj
+            max_min_val = 65535 if is_last else max_min
             entries.append(
                 f"    TpkDbEntry {{ class_id: {class_id}, version_range: VersionRange {{ min_major: {min_maj_val}, min_minor: {min_min_val}, max_major: {max_maj_val}, max_minor: {max_min_val} }}, nodes: {array_name} }},\n"
             )
