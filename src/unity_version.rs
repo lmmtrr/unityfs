@@ -3,7 +3,7 @@ use regex::Regex;
 use serde::Serialize;
 use once_cell::sync::Lazy;
 static VERSION_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?P<major>[0-9]+)\.(?P<minor>[0-9]+)\.(?P<patch>[0-9]+)(?:(?P<type_str>[a-z])(?P<type_number>\d+)?)?.*$").unwrap()
+    Regex::new(r"(?s)^(?P<major>[0-9]+)\.(?P<minor>[0-9]+)\.(?P<patch>[0-9]+)(?:(?P<type_str>[a-z])(?P<type_number>\d+)?)?.*$").unwrap()
 });
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[repr(u8)]

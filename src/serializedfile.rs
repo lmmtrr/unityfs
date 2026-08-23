@@ -86,6 +86,9 @@ impl SerializedFile {
         let _head_dump = reader.read_bytes(64);
         reader.pos = head_pos;
         let mut unity_version = unity_version_str.parse::<UnityVersion>().unwrap_or_default();
+        if unity_version.is_empty() && !reader.unity_version.is_empty() {
+            unity_version = reader.unity_version.clone();
+        }
         if unity_version.is_empty() {
             unity_version = UnityVersion::guess_from_format(version);
         }
