@@ -32,6 +32,13 @@ CLASS_IDS = [
 ]
 
 
+def previous_version(version):
+    major, minor = version
+    if minor > 0:
+        return (major, minor - 1)
+    return (major - 1, 65535)
+
+
 def flatten_tree(node, nodes_list):
     level = node.m_Level
     type_str = node.m_Type
@@ -69,7 +76,8 @@ def main():
             class_info = by_minor[key]
             try:
                 root = generate_node(class_info)
-            except Exception:
+            except Exception as exc:
+                print(f"warning: class {class_id} {key[0]}.{key[1]} skipped ({exc!r})")
                 continue
             nodes = []
             flatten_tree(root, nodes)
@@ -147,8 +155,11 @@ def main():
             is_last = idx_entry == len(class_entries) - 1
             min_maj_val = 0 if is_first else min_maj
             min_min_val = 0 if is_first else min_min
-            max_maj_val = 65535 if is_last else max_maj
-            max_min_val = 65535 if is_last else max_min
+            if is_last:
+                max_maj_val, max_min_val = 65535, 65535
+            else:
+                next_min = class_entries[idx_entry + 1][0]
+                max_maj_val, max_min_val = previous_version(next_min)
             entries.append(
                 f"    TpkDbEntry {{ class_id: {class_id}, version_range: VersionRange {{ min_major: {min_maj_val}, min_minor: {min_min_val}, max_major: {max_maj_val}, max_minor: {max_min_val} }}, nodes: {array_name} }},\n"
             )
