@@ -1,9 +1,11 @@
 use crate::define_unity_class;
+
 define_unity_class!(StreamedResource {
     m_Source: String,
     m_Offset: u64,
     m_Size: u64,
 });
+
 define_unity_class!(VideoClip {
     m_Name: String,
     m_OriginalPath: Option<String>,

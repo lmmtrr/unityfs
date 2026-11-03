@@ -1,7 +1,6 @@
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-
 use crate::assets::AssetManager;
 use crate::serializedfile::SerializedFile;
 use crate::value::UnityValue;
@@ -12,6 +11,7 @@ use crate::classes::TryFromUnityValue;
 pub fn is_unity_bundle(data: &[u8]) -> bool {
     data.starts_with(b"UnityFS") || data.starts_with(b"UnityWeb") || data.starts_with(b"UnityRaw")
 }
+
 fn find_and_extract_criware_bytes_lib(
     value: &UnityValue,
     output_dir: &Path,
@@ -79,7 +79,6 @@ fn find_and_extract_criware_bytes_lib(
                     return;
                 }
             }
-
             for (idx, item) in arr.iter().enumerate() {
                 let item_key = if parent_key.is_empty() {
                     idx.to_string()
@@ -102,6 +101,7 @@ fn find_and_extract_criware_bytes_lib(
         _ => {}
     }
 }
+
 pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: &[u8]) -> Option<Vec<u8>> {
     let (block_w, block_h) = match format {
         10 | 11 | 12 | 24 | 25 | 26 | 27 | 34 | 35 | 36 | 41 | 42 | 43 | 44 | 45 | 46 | 47 => (4, 4),
@@ -365,11 +365,13 @@ pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: 
         None
     }
 }
+
 struct PosePartData {
     id: String,
     group_index: i32,
     link: Vec<String>,
 }
+
 fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Result<Vec<PathBuf>, String> {
     let mut extracted_files = Vec::new();
     let mut pose_parts = Vec::new();
@@ -455,7 +457,6 @@ fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Resul
                             is_cubism_expression = true;
                         }
                     }
-
                     if is_cubism_fade_motion {
                         if let Some(json_val) = convert_fade_motion_to_json(&value) {
                             if let Ok(bytes) = serde_json::to_vec_pretty(&json_val) {
@@ -708,6 +709,7 @@ fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Resul
     }
     Ok(extracted_files)
 }
+
 fn save_png<P: AsRef<Path>>(path: P, data: &[u8], width: u32, height: u32) -> Result<(), String> {
     let file = File::create(path).map_err(|e| e.to_string())?;
     let w = std::io::BufWriter::new(file);
@@ -719,6 +721,7 @@ fn save_png<P: AsRef<Path>>(path: P, data: &[u8], width: u32, height: u32) -> Re
     writer.write_image_data(data).map_err(|e| e.to_string())?;
     Ok(())
 }
+
 pub fn extract_unity_assets<P: AsRef<Path>>(bundle_bytes: &[u8], out_dir: P) -> Result<Vec<PathBuf>, String> {
     let out_dir = out_dir.as_ref();
     fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
@@ -736,6 +739,7 @@ pub fn extract_unity_assets<P: AsRef<Path>>(bundle_bytes: &[u8], out_dir: P) -> 
     }
     extract_assets_internal(asset_manager, out_dir)
 }
+
 pub fn extract_unity_assets_from_path<P: AsRef<Path>, Q: AsRef<Path>>(bundle_path: P, out_dir: Q) -> Result<Vec<PathBuf>, String> {
     let out_dir = out_dir.as_ref();
     fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
@@ -755,6 +759,7 @@ pub fn extract_unity_assets_from_path<P: AsRef<Path>, Q: AsRef<Path>>(bundle_pat
     }
     extract_assets_internal(asset_manager, out_dir)
 }
+
 fn flatten_json_paths(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::String(s) => {
@@ -777,6 +782,7 @@ fn flatten_json_paths(value: &mut serde_json::Value) {
         _ => {}
     }
 }
+
 fn get_mono_behaviour_class_name(asset_manager: &AssetManager, source_file_name: &str, m_script_pptr: &UnityValue) -> Option<String> {
     if let UnityValue::PPtr { file_id, path_id } = m_script_pptr {
         if let Ok(script_val) = asset_manager.read_object_value(source_file_name, *file_id, *path_id) {
@@ -787,6 +793,7 @@ fn get_mono_behaviour_class_name(asset_manager: &AssetManager, source_file_name:
     }
     None
 }
+
 fn resolve_class_name(
     value: &UnityValue,
     asset_manager: &AssetManager,
@@ -796,26 +803,28 @@ fn resolve_class_name(
         if let Some(class_name) = get_mono_behaviour_class_name(asset_manager, asset_name, script_pptr) {
             return Some(class_name);
         }
-    }    
+    }
     if value.get("ParameterIds").is_some() && value.get("ParameterCurves").is_some() {
         return Some("CubismFadeMotionData".to_string());
-    }    
+    }
     if value.get("Parameters").is_some() && value.get("FadeInTime").is_some() && value.get("FadeOutTime").is_some() {
         if value.get("ParameterIds").is_none() {
             return Some("CubismExpressionData".to_string());
         }
-    }    
+    }
     if value.get("GroupIndex").is_some() && value.get("Link").is_some() && value.get("m_GameObject").is_some() {
         return Some("CubismPosePart".to_string());
     }
     None
 }
+
 struct Keyframe {
     time: f32,
     value: f32,
     in_slope: f32,
     out_slope: f32,
 }
+
 fn parse_float(val: Option<&UnityValue>) -> Option<f32> {
     match val {
         Some(UnityValue::Float(f)) => Some(*f),
@@ -831,6 +840,7 @@ fn parse_float(val: Option<&UnityValue>) -> Option<f32> {
         _ => None,
     }
 }
+
 fn parse_keyframe(val: &UnityValue) -> Option<Keyframe> {
     let map = match val {
         UnityValue::Map(m) => m,
@@ -846,6 +856,7 @@ fn parse_keyframe(val: &UnityValue) -> Option<Keyframe> {
         .unwrap_or(0.0);
     Some(Keyframe { time, value, in_slope, out_slope })
 }
+
 fn add_segments(
     curve: &Keyframe,
     pre_curve: &Keyframe,
@@ -892,6 +903,7 @@ fn add_segments(
     }
     *total_segment_count += 1;
 }
+
 fn convert_fade_motion_to_json(value: &UnityValue) -> Option<serde_json::Value> {
     let map = match value {
         UnityValue::Map(m) => m,
@@ -1006,6 +1018,7 @@ fn convert_fade_motion_to_json(value: &UnityValue) -> Option<serde_json::Value> 
     });
     Some(motion_json)
 }
+
 fn convert_expression_data_to_json(value: &UnityValue) -> Option<serde_json::Value> {
     let map = match value {
         UnityValue::Map(m) => m,

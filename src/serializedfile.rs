@@ -1,6 +1,7 @@
 use crate::reader::{Reader, Endian};
 use crate::unity_version::UnityVersion;
 use crate::objectreader::ObjectReader;
+
 #[allow(non_snake_case)]
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct TypeTreeNode {
@@ -16,17 +17,20 @@ pub struct TypeTreeNode {
     pub m_Type: String,
     pub m_Name: String,
 }
+
 #[derive(Clone, Debug)]
 pub struct SerializedType {
     pub class_id: i32,
     pub nodes: std::sync::Arc<[TypeTreeNode]>,
 }
+
 #[derive(Clone, Debug)]
 pub struct FileIdentifier {
     pub guid: [u8; 16],
     pub type_: i32,
     pub path_name: String,
 }
+
 #[derive(Clone, Debug)]
 pub struct RefType {
     pub class_name: String,
@@ -34,6 +38,7 @@ pub struct RefType {
     pub assembly_name: String,
     pub nodes: std::sync::Arc<[TypeTreeNode]>,
 }
+
 pub struct SerializedFile {
     pub data: crate::reader::ByteSource,
     pub version: u32,
@@ -47,6 +52,7 @@ pub struct SerializedFile {
     pub object_map: std::collections::HashMap<i64, usize>,
     pub ref_types: Vec<RefType>,
 }
+
 impl SerializedFile {
     pub fn read(reader: &mut Reader) -> Self {
         let _original_endian = reader.endian;
@@ -185,6 +191,7 @@ impl SerializedFile {
             ref_types,
         }
     }
+
     fn read_type(reader: &mut Reader, version: u32, enable_type_tree: bool, is_ref_type: bool) -> (SerializedType, Option<(String, String, String)>) {
         let class_id = reader.read_i32();
         if version >= 16 {
@@ -222,6 +229,7 @@ impl SerializedFile {
         }
         (SerializedType { class_id, nodes: nodes.into() }, ref_type_info)
     }
+
     fn read_type_tree_recursive(reader: &mut Reader, level: i8) -> Vec<TypeTreeNode> {
         let mut type_tree = Vec::new();
         let m_type = reader.read_string_null();
@@ -250,6 +258,7 @@ impl SerializedFile {
         }
         type_tree
     }
+
     fn read_type_tree_blob(reader: &mut Reader, version: u32) -> Vec<TypeTreeNode> {
         let node_count = reader.read_i32();
         let string_buffer_size = reader.read_i32();
@@ -278,6 +287,7 @@ impl SerializedFile {
             }
         }).collect()
     }
+
     fn read_type_tree_node(reader: &mut Reader, version: u32) -> RawTypeTreeNode {
         if version >= 19 {
             let v = reader.read_u16();
@@ -308,6 +318,7 @@ impl SerializedFile {
             }
         }
     }
+
     fn get_string(buffer: &[u8], offset: u32) -> String {
         if offset & 0x80000000 != 0 {
             let id = offset & 0x7FFFFFFF;
@@ -324,6 +335,7 @@ impl SerializedFile {
             String::from_utf8_lossy(&buffer[start..end.min(buffer.len())]).into_owned()
         }
     }
+
     fn read_object_inner(
         reader: &mut Reader,
         version: u32,
@@ -398,6 +410,7 @@ impl SerializedFile {
         obj
     }
 }
+
 struct RawTypeTreeNode {
     version: i16,
     level: i8,

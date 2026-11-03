@@ -2,19 +2,23 @@ use std::collections::BTreeMap;
 use crate::reader::Reader;
 use crate::value::UnityValue;
 use crate::serializedfile::TypeTreeNode;
+
 pub struct TypeTreeReader<'a> {
     pub reader: &'a mut Reader,
     pub obj_end: usize,
     pub ref_types: &'a [crate::serializedfile::RefType],
     pub class_id: i32,
 }
+
 fn should_ignore_field(name: &str) -> bool {
     name == "m_BakedConvexCollisionMesh" || name == "m_BakedTriangleCollisionMesh" || name == "m_VariableBoneCountWeights"
 }
+
 impl<'a> TypeTreeReader<'a> {
     pub fn new(reader: &'a mut Reader, obj_end: usize, ref_types: &'a [crate::serializedfile::RefType], class_id: i32) -> Self {
         Self { reader, obj_end, ref_types, class_id }
     }
+
     pub fn read(&mut self, nodes: &[TypeTreeNode]) -> UnityValue {
         if nodes.is_empty() {
             return UnityValue::Null;
@@ -22,6 +26,7 @@ impl<'a> TypeTreeReader<'a> {
         let mut index = 0;
         self.read_node(nodes, &mut index)
     }
+
     fn read_node(&mut self, nodes: &[TypeTreeNode], index: &mut usize) -> UnityValue {
         if self.reader.pos >= self.obj_end {
             let end = self.get_node_end(nodes, *index);
@@ -127,6 +132,7 @@ impl<'a> TypeTreeReader<'a> {
         }
         res
     }
+
     fn read_array(&mut self, nodes: &[TypeTreeNode], index: &mut usize) -> UnityValue {
         let container_index = *index;
         let array_node_index = container_index + 1;
@@ -171,6 +177,7 @@ impl<'a> TypeTreeReader<'a> {
         }
         UnityValue::Array(arr)
     }
+
     fn read_pptr(&mut self, nodes: &[TypeTreeNode], index: &mut usize) -> UnityValue {
         let container_index = *index;
         let end = self.get_node_end(nodes, container_index);
@@ -191,6 +198,7 @@ impl<'a> TypeTreeReader<'a> {
             path_id: map.get("m_PathID").and_then(|v| v.as_i64()).unwrap_or(0),
         }
     }
+
     fn read_class(&mut self, nodes: &[TypeTreeNode], index: &mut usize) -> UnityValue {
         let container_index = *index;
         let end = self.get_node_end(nodes, container_index);
@@ -214,6 +222,7 @@ impl<'a> TypeTreeReader<'a> {
         *index = end - 1;
         UnityValue::Map(map)
     }
+
     fn read_referenced_object(&mut self, nodes: &[TypeTreeNode], index: &mut usize) -> UnityValue {
         let container_index = *index;
         let end = self.get_node_end(nodes, container_index);
@@ -256,6 +265,7 @@ impl<'a> TypeTreeReader<'a> {
         *index = end - 1;
         UnityValue::Map(map)
     }
+
     fn get_node_end(&self, nodes: &[TypeTreeNode], start_index: usize) -> usize {
         let level = nodes[start_index].m_Level;
         for i in (start_index + 1)..nodes.len() {
@@ -265,6 +275,7 @@ impl<'a> TypeTreeReader<'a> {
         }
         nodes.len()
     }
+
     fn has_any_align_flag(&self, nodes: &[TypeTreeNode], start_index: usize) -> bool {
         let end = self.get_node_end(nodes, start_index);
         for i in start_index..end {
@@ -274,6 +285,7 @@ impl<'a> TypeTreeReader<'a> {
         }
         false
     }
+
     fn get_subtree_byte_size(&self, nodes: &[TypeTreeNode], start_index: usize) -> Option<usize> {
         if self.has_any_align_flag(nodes, start_index) {
             return None;
@@ -305,6 +317,7 @@ impl<'a> TypeTreeReader<'a> {
         }
         Some(total_size)
     }
+
     fn skip_node(&mut self, nodes: &[TypeTreeNode], index: &mut usize) {
         let node = &nodes[*index];
         let align = (node.m_MetaFlag & 0x4000) != 0;
@@ -379,6 +392,7 @@ impl<'a> TypeTreeReader<'a> {
             self.reader.align(4);
         }
     }
+
     fn skip_array(&mut self, nodes: &[TypeTreeNode], index: &mut usize) {
         let container_index = *index;
         let array_node_index = container_index + 1;
@@ -423,6 +437,7 @@ impl<'a> TypeTreeReader<'a> {
             self.reader.align(4);
         }
     }
+
     fn skip_class(&mut self, nodes: &[TypeTreeNode], index: &mut usize) {
         let container_index = *index;
         let end = self.get_node_end(nodes, container_index);

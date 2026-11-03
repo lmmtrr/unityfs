@@ -2,9 +2,11 @@ use std::str::FromStr;
 use regex::Regex;
 use serde::Serialize;
 use once_cell::sync::Lazy;
+
 static VERSION_PATTERN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?s)^(?P<major>[0-9]+)\.(?P<minor>[0-9]+)\.(?P<patch>[0-9]+)(?:(?P<type_str>[a-z])(?P<type_number>\d+)?)?.*$").unwrap()
 });
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[repr(u8)]
 pub enum UnityVersionType {
@@ -16,6 +18,7 @@ pub enum UnityVersionType {
     Experimental = 5,
     Unknown = 255,
 }
+
 impl From<&str> for UnityVersionType {
     fn from(s: &str) -> Self {
         match s.to_lowercase().as_str() {
@@ -29,8 +32,10 @@ impl From<&str> for UnityVersionType {
         }
     }
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct UnityVersion(u64);
+
 impl UnityVersion {
     pub const fn new(major: u16, minor: u16, patch: u16, ver_type: UnityVersionType, type_number: u8) -> Self {
         let val = ((major as u64) << 48) |
@@ -40,12 +45,17 @@ impl UnityVersion {
                   (type_number as u64);
         Self(val)
     }
+
     pub const fn empty() -> Self {
         Self::new(0, 0, 0, UnityVersionType::Unknown, 0)
     }
+
     pub fn major(&self) -> u16 { ((self.0 >> 48) & 0xFFFF) as u16 }
+
     pub fn minor(&self) -> u16 { ((self.0 >> 32) & 0xFFFF) as u16 }
+
     pub fn patch(&self) -> u16 { ((self.0 >> 16) & 0xFFFF) as u16 }
+
     pub fn ver_type(&self) -> UnityVersionType {
         match (self.0 >> 8) & 0xFF {
             0 => UnityVersionType::Alpha,
@@ -57,10 +67,13 @@ impl UnityVersion {
             _ => UnityVersionType::Unknown,
         }
     }
+
     pub fn type_number(&self) -> u8 { (self.0 & 0xFF) as u8 }
+
     pub fn is_empty(&self) -> bool {
         self.major() == 0
     }
+
     pub fn guess_from_format(format_version: u32) -> Self {
         match format_version {
             0..=10 => Self::new(4, 0, 0, UnityVersionType::Final, 0),
@@ -73,11 +86,13 @@ impl UnityVersion {
         }
     }
 }
+
 impl PartialEq<(u16, u16)> for UnityVersion {
     fn eq(&self, other: &(u16, u16)) -> bool {
         self.major() == other.0 && self.minor() == other.1
     }
 }
+
 impl PartialOrd<(u16, u16)> for UnityVersion {
     fn partial_cmp(&self, other: &(u16, u16)) -> Option<std::cmp::Ordering> {
         match self.major().partial_cmp(&other.0) {
@@ -86,11 +101,13 @@ impl PartialOrd<(u16, u16)> for UnityVersion {
         }
     }
 }
+
 impl PartialEq<(u16, u16, u16)> for UnityVersion {
     fn eq(&self, other: &(u16, u16, u16)) -> bool {
         self.major() == other.0 && self.minor() == other.1 && self.patch() == other.2
     }
 }
+
 impl PartialOrd<(u16, u16, u16)> for UnityVersion {
     fn partial_cmp(&self, other: &(u16, u16, u16)) -> Option<std::cmp::Ordering> {
         match self.major().partial_cmp(&other.0) {
@@ -102,8 +119,10 @@ impl PartialOrd<(u16, u16, u16)> for UnityVersion {
         }
     }
 }
+
 impl FromStr for UnityVersion {
     type Err = String;
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Some(caps) = VERSION_PATTERN.captures(s) {
             let major = caps["major"].parse::<u16>().map_err(|e| e.to_string())?;
@@ -124,6 +143,7 @@ impl FromStr for UnityVersion {
         }
     }
 }
+
 impl std::fmt::Display for UnityVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.is_empty() {
@@ -142,6 +162,7 @@ impl std::fmt::Display for UnityVersion {
         }
     }
 }
+
 impl Default for UnityVersion {
     fn default() -> Self {
         Self::empty()

@@ -5,8 +5,10 @@ pub mod texture2d;
 pub mod mesh;
 pub mod skinned_mesh_renderer;
 pub mod videoclip;
+
 use crate::value::UnityValue;
 use std::collections::BTreeMap;
+
 pub fn map_field<T>(map: &BTreeMap<String, UnityValue>, key: &str) -> Result<T, String>
 where T: TryFromUnityValue {
     if let Some(v) = map.get(key) {
@@ -18,12 +20,15 @@ where T: TryFromUnityValue {
     }
     T::try_from_missing_field().map_err(|_| format!("Missing field: {}", key))
 }
+
 pub trait TryFromUnityValue: Sized {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String>;
+
     fn try_from_missing_field() -> Result<Self, ()> {
         Err(())
     }
 }
+
 impl<T: TryFromUnityValue> TryFromUnityValue for Option<T> {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match T::try_from_unity_value(value) {
@@ -31,10 +36,12 @@ impl<T: TryFromUnityValue> TryFromUnityValue for Option<T> {
             Err(_) => Ok(None),
         }
     }
+
     fn try_from_missing_field() -> Result<Self, ()> {
         Ok(None)
     }
 }
+
 impl TryFromUnityValue for String {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
@@ -43,6 +50,7 @@ impl TryFromUnityValue for String {
         }
     }
 }
+
 impl TryFromUnityValue for bool {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
@@ -51,6 +59,7 @@ impl TryFromUnityValue for bool {
         }
     }
 }
+
 impl TryFromUnityValue for i32 {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
@@ -66,6 +75,7 @@ impl TryFromUnityValue for i32 {
         }
     }
 }
+
 impl TryFromUnityValue for f32 {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
@@ -74,6 +84,7 @@ impl TryFromUnityValue for f32 {
         }
     }
 }
+
 impl TryFromUnityValue for f64 {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
@@ -83,8 +94,10 @@ impl TryFromUnityValue for f64 {
         }
     }
 }
+
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct TypelessData(pub Vec<u8>);
+
 impl TryFromUnityValue for TypelessData {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
@@ -101,6 +114,7 @@ impl TryFromUnityValue for TypelessData {
         }
     }
 }
+
 impl TryFromUnityValue for u32 {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
@@ -116,6 +130,7 @@ impl TryFromUnityValue for u32 {
         }
     }
 }
+
 impl TryFromUnityValue for u16 {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
@@ -131,6 +146,7 @@ impl TryFromUnityValue for u16 {
         }
     }
 }
+
 impl TryFromUnityValue for u8 {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
@@ -146,6 +162,7 @@ impl TryFromUnityValue for u8 {
         }
     }
 }
+
 impl<T: TryFromUnityValue> TryFromUnityValue for Vec<T> {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
@@ -156,6 +173,7 @@ impl<T: TryFromUnityValue> TryFromUnityValue for Vec<T> {
         }
     }
 }
+
 impl TryFromUnityValue for crate::math::Vector3 {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
@@ -169,6 +187,7 @@ impl TryFromUnityValue for crate::math::Vector3 {
         }
     }
 }
+
 impl TryFromUnityValue for crate::math::Quaternion {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
@@ -183,6 +202,7 @@ impl TryFromUnityValue for crate::math::Quaternion {
         }
     }
 }
+
 impl TryFromUnityValue for crate::math::Matrix4x4 {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
@@ -199,11 +219,13 @@ impl TryFromUnityValue for crate::math::Matrix4x4 {
         }
     }
 }
+
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct PPtr {
     pub file_id: i32,
     pub path_id: i64,
 }
+
 impl TryFromUnityValue for PPtr {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
@@ -217,6 +239,7 @@ impl TryFromUnityValue for PPtr {
         }
     }
 }
+
 impl TryFromUnityValue for i64 {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
@@ -232,10 +255,12 @@ impl TryFromUnityValue for i64 {
         }
     }
 }
+
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct ComponentPair {
     pub component: PPtr,
 }
+
 impl TryFromUnityValue for ComponentPair {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {
@@ -247,6 +272,7 @@ impl TryFromUnityValue for ComponentPair {
         }
     }
 }
+
 #[macro_export]
 macro_rules! define_unity_class {
     ($name:ident { $($field_name:ident : $field_type:ty),* $(,)? }) => {
@@ -276,11 +302,13 @@ macro_rules! define_unity_class {
         }
     };
 }
+
 define_unity_class!(StreamingInfo {
     offset: u64,
     size: u32,
     path: String,
 });
+
 impl TryFromUnityValue for u64 {
     fn try_from_unity_value(value: &UnityValue) -> Result<Self, String> {
         match value {

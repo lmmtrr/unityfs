@@ -1,4 +1,5 @@
 use crate::define_unity_class;
+
 define_unity_class!(Texture2D {
     m_Name: String,
     m_Width: i32,

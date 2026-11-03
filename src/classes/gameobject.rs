@@ -1,4 +1,5 @@
 use crate::define_unity_class;
+
 define_unity_class!(GameObject {
     m_Name: String,
     m_IsActive: bool,

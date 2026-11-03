@@ -18,13 +18,16 @@ impl VersionRange {
     pub const fn all() -> Self {
         Self { min_major: 0, min_minor: 0, max_major: u16::MAX, max_minor: u16::MAX }
     }
+
     pub fn matches(&self, version: &UnityVersion) -> bool {
         let val = version_value(version);
         val >= self.min_value() && val <= self.max_value()
     }
+
     pub fn min_value(&self) -> u32 {
         ((self.min_major as u32) << 16) | (self.min_minor as u32)
     }
+
     pub fn max_value(&self) -> u32 {
         ((self.max_major as u32) << 16) | (self.max_minor as u32)
     }

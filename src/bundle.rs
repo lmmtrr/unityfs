@@ -1,13 +1,16 @@
 use crate::reader::{Reader, Endian};
 use crate::unity_version::UnityVersion;
+
 pub struct Bundle {
     pub engine_version: UnityVersion,
     pub files: Vec<BundleEntry>,
 }
+
 pub struct BundleEntry {
     pub name: String,
     pub data: Vec<u8>,
 }
+
 impl Bundle {
     pub fn read(reader: &mut Reader) -> Result<Self, String> {
         let signature = reader.read_bytes(8);

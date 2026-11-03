@@ -2,6 +2,7 @@ use crate::reader::Reader;
 use crate::serializedfile::SerializedType;
 use crate::typetree::TypeTreeReader;
 use crate::value::UnityValue;
+
 pub struct ObjectReader {
     pub path_id: i64,
     pub class_id: i32,
@@ -10,6 +11,7 @@ pub struct ObjectReader {
     pub serialized_type: Option<SerializedType>,
     pub version: u32,
 }
+
 impl ObjectReader {
     pub fn new(
         path_id: i64,
@@ -28,6 +30,7 @@ impl ObjectReader {
             version,
         }
     }
+
     pub fn read_typetree(&self, reader: &mut Reader, ref_types: &[crate::serializedfile::RefType]) -> Result<UnityValue, String> {
         let nodes = match &self.serialized_type {
             Some(t) if !t.nodes.is_empty() => &t.nodes,
@@ -38,6 +41,7 @@ impl ObjectReader {
         let res = tt_reader.read(nodes);
         Ok(res)
     }
+
     pub fn type_name(&self) -> &str {
         if let Some(ref t) = self.serialized_type {
             if let Some(node) = t.nodes.first() {
@@ -64,6 +68,7 @@ impl ObjectReader {
             _ => "Unknown",
         }
     }
+
     pub fn read_name(&self, reader: &mut Reader, ref_types: &[crate::serializedfile::RefType]) -> Option<String> {
         if let Ok(value) = self.read_typetree(reader, ref_types) {
             if let Some(name_val) = value.get("m_Name") {

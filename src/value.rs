@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use serde::{Serialize, Deserialize};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum UnityValue {
@@ -26,6 +27,7 @@ pub enum UnityValue {
     },
     Null,
 }
+
 impl UnityValue {
     pub fn as_i32(&self) -> Option<i32> {
         match self {
@@ -40,6 +42,7 @@ impl UnityValue {
             _ => None,
         }
     }
+
     pub fn as_i64(&self) -> Option<i64> {
         match self {
             UnityValue::Int8(v) => Some(*v as i64),
@@ -53,12 +56,14 @@ impl UnityValue {
             _ => None,
         }
     }
+
     pub fn as_str(&self) -> Option<&str> {
         match self {
             UnityValue::String(s) => Some(s),
             _ => None,
         }
     }
+
     pub fn get(&self, key: &str) -> Option<&UnityValue> {
         match self {
             UnityValue::Map(map) => map.get(key),

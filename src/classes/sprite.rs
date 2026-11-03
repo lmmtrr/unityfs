@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::value::UnityValue;
 use crate::math::{Rect, Vector2};
+
 #[allow(non_snake_case)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Sprite {
@@ -10,6 +11,7 @@ pub struct Sprite {
     pub m_PixelsToUnits: f32,
     pub m_PhysicsShape: Option<Vec<Vec<Vector2>>>,
 }
+
 impl Sprite {
     pub fn from_value(value: UnityValue) -> Result<Self, String> {
         let map = match value {

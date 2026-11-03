@@ -1,17 +1,20 @@
 use crate::define_unity_class;
 use crate::math::Matrix4x4;
+
 define_unity_class!(ChannelInfo {
     stream: u8,
     offset: u8,
     format: u8,
     dimension: u8,
 });
+
 define_unity_class!(VertexData {
     m_VertexCount: u32,
     m_Channels: Vec<ChannelInfo>,
     m_DataSize: Option<crate::classes::TypelessData>,
     _typelessdata: Option<crate::classes::TypelessData>,
 });
+
 define_unity_class!(SubMesh {
     firstByte: u32,
     indexCount: u32,
@@ -20,8 +23,10 @@ define_unity_class!(SubMesh {
     firstVertex: u32,
     vertexCount: u32,
 });
+
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct PackedData(pub Vec<u8>);
+
 impl crate::classes::TryFromUnityValue for PackedData {
     fn try_from_unity_value(value: &crate::value::UnityValue) -> Result<Self, String> {
         match value {
@@ -37,6 +42,7 @@ impl crate::classes::TryFromUnityValue for PackedData {
         }
     }
 }
+
 define_unity_class!(PackedBitVector {
     m_NumItems: u32,
     m_Range: Option<f32>,
@@ -44,6 +50,7 @@ define_unity_class!(PackedBitVector {
     m_Data: PackedData,
     m_BitSize: u8,
 });
+
 impl PackedBitVector {
     pub fn unpack_ints(&self, start: usize, count: usize) -> Vec<u32> {
         let bit_size = self.m_BitSize as usize;
@@ -76,6 +83,7 @@ impl PackedBitVector {
         }
         result
     }
+
     pub fn unpack_floats(&self, start: usize, count: usize) -> Vec<f32> {
         let bit_size = self.m_BitSize as usize;
         let start_val = self.m_Start.unwrap_or(0.0);
@@ -91,6 +99,7 @@ impl PackedBitVector {
             .collect()
     }
 }
+
 define_unity_class!(CompressedMesh {
     m_Vertices: Option<PackedBitVector>,
     m_UV: Option<PackedBitVector>,
@@ -104,6 +113,7 @@ define_unity_class!(CompressedMesh {
     m_Triangles: Option<PackedBitVector>,
     m_UVInfo: Option<u32>,
 });
+
 define_unity_class!(Mesh {
     m_Name: String,
     m_VertexData: VertexData,
@@ -116,6 +126,7 @@ define_unity_class!(Mesh {
     m_MeshCompression: Option<u8>,
     m_CompressedMesh: Option<CompressedMesh>,
 });
+
 impl Mesh {
     pub fn get_vertex_count(&self) -> usize {
         let count = self.m_VertexData.m_VertexCount as usize;
@@ -128,6 +139,7 @@ impl Mesh {
         }
         count
     }
+
     pub fn get_format_size(format: u8) -> usize {
         match format {
             0 => 4,
@@ -138,6 +150,7 @@ impl Mesh {
             _ => 4,
         }
     }
+
     pub fn get_stream_stride(&self, stream: u8) -> usize {
         let mut stride = 0;
         for ch in &self.m_VertexData.m_Channels {
@@ -151,6 +164,7 @@ impl Mesh {
         }
         (stride + 3) & !3
     }
+
     pub fn get_stream_offset(&self, stream: u8) -> usize {
         let mut offset = 0;
         let v_count = self.m_VertexData.m_VertexCount as usize;
@@ -163,6 +177,7 @@ impl Mesh {
         }
         offset
     }
+
     pub fn get_vertices(&self) -> Result<Vec<crate::math::Vector3>, String> {
         if let Some(ref compressed) = self.m_CompressedMesh {
             if let Some(ref vertices) = compressed.m_Vertices {
@@ -182,6 +197,7 @@ impl Mesh {
         }
         self.extract_float_vector3(0)
     }
+
     pub fn get_normals(&self) -> Result<Vec<crate::math::Vector3>, String> {
         if let Some(ref compressed) = self.m_CompressedMesh {
             if let Some(ref normals_pb) = compressed.m_Normals {
@@ -235,6 +251,7 @@ impl Mesh {
         }
         self.extract_float_vector3(1)
     }
+
     pub fn get_indices(&self) -> Result<Vec<u32>, String> {
         if let Some(ref compressed) = self.m_CompressedMesh {
             if let Some(ref triangles) = compressed.m_Triangles {
@@ -261,6 +278,7 @@ impl Mesh {
         }
         Ok(result)
     }
+
     pub fn extract_float_vector3(&self, channel: usize) -> Result<Vec<crate::math::Vector3>, String> {
         if channel >= self.m_VertexData.m_Channels.len() {
             return Err("Channel not found".to_string());
@@ -292,6 +310,7 @@ impl Mesh {
         }
         Ok(result)
     }
+
     pub fn extract_uvs(&self) -> Result<Vec<(f32, f32)>, String> {
         if let Some(ref compressed) = self.m_CompressedMesh {
             if let Some(ref uv_pb) = compressed.m_UV {
@@ -372,6 +391,7 @@ impl Mesh {
         }
         Ok(result)
     }
+
     pub fn extract_bone_weights(&self) -> Result<Vec<crate::math::Vector4>, String> {
         if let Some(ref compressed) = self.m_CompressedMesh {
             if let Some(ref weights_pb) = compressed.m_Weights {
@@ -453,6 +473,7 @@ impl Mesh {
         }
         Ok(result)
     }
+
     pub fn extract_bone_indices(&self) -> Result<Vec<[u32; 4]>, String> {
         if let Some(ref compressed) = self.m_CompressedMesh {
             if let Some(ref weights_pb) = compressed.m_Weights {
@@ -544,6 +565,7 @@ impl Mesh {
         Ok(result)
     }
 }
+
 pub fn f16_to_f32(h: u16) -> f32 {
     let sign = ((h >> 15) & 1) as u32;
     let exp = ((h >> 10) & 0x1f) as u32;

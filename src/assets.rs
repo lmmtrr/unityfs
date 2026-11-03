@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use crate::serializedfile::SerializedFile;
 use crate::objectreader::ObjectReader;
+
 pub struct AssetManager {
     pub files: HashMap<String, SerializedFile>,
     pub raw_files: HashMap<String, Vec<u8>>,
     pub simplified_files: HashMap<String, String>,
 }
+
 impl AssetManager {
     pub fn new() -> Self {
         Self {
@@ -14,19 +16,23 @@ impl AssetManager {
             simplified_files: HashMap::new(),
         }
     }
+
     pub fn add_file(&mut self, name: String, file: SerializedFile) {
         let simple = simplify_name(&name);
         self.simplified_files.insert(simple, name.clone());
         self.files.insert(name, file);
     }
+
     pub fn add_raw_file(&mut self, name: String, data: Vec<u8>) {
         self.raw_files.insert(name, data);
     }
+
     pub fn get_object(&self, file_name: &str, path_id: i64) -> Option<&ObjectReader> {
         self.files.get(file_name).and_then(|f| {
             f.object_map.get(&path_id).map(|&idx| &f.objects[idx])
         })
     }
+
     fn get_file_by_name(&self, name: &str) -> Option<(&String, &SerializedFile)> {
         if let Some(kv) = self.files.get_key_value(name) {
             return Some(kv);
@@ -37,6 +43,7 @@ impl AssetManager {
         }
         None
     }
+
     pub fn resolve_pptr<'a>(&'a self, source_file_name: &str, file_id: i32, path_id: i64) -> Option<(&'a str, &'a ObjectReader)> {
         if file_id == 0 {
             let (name, sf) = self.get_file_by_name(source_file_name)?;
@@ -53,6 +60,7 @@ impl AssetManager {
             Some((name.as_str(), obj))
         }
     }
+
     pub fn read_object_value(&self, source_file_name: &str, file_id: i32, path_id: i64) -> Result<crate::value::UnityValue, String> {
         let (file_name, obj) = self.resolve_pptr(source_file_name, file_id, path_id).ok_or("Failed to resolve PPtr")?;
         let sf = self.get_file_by_name(file_name).unwrap().1;
@@ -65,6 +73,7 @@ impl AssetManager {
         obj.read_typetree(&mut reader, &sf.ref_types)
     }
 }
+
 pub struct GameObjectNode<'a> {
     pub manager: &'a AssetManager,
     pub file_name: &'a str,
@@ -72,6 +81,7 @@ pub struct GameObjectNode<'a> {
     pub go: crate::GameObject,
     pub transform: crate::Transform,
 }
+
 impl<'a> GameObjectNode<'a> {
     pub fn new(manager: &'a AssetManager, file_name: &'a str, path_id: i64) -> Result<Self, String> {
         let go_val = manager.read_object_value(file_name, 0, path_id)?;
@@ -94,6 +104,7 @@ impl<'a> GameObjectNode<'a> {
             transform,
         })
     }
+
     pub fn children(&self) -> Vec<GameObjectNode<'a>> {
         let mut children = Vec::new();
         for child_pptr in &self.transform.m_Children {
@@ -113,6 +124,7 @@ impl<'a> GameObjectNode<'a> {
         children
     }
 }
+
 fn simplify_name(name: &str) -> String {
     let name = name.replace('\\', "/");
     let basename = name.rsplit('/').next().unwrap_or(&name);
