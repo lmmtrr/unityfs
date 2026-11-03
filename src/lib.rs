@@ -17,7 +17,7 @@ pub use unity_version::UnityVersion;
 pub use reader::Reader;
 pub use value::UnityValue;
 pub use typetree::TypeTreeReader;
-pub use bundle::Bundle;
+pub use bundle::{Bundle, BundleFile, BundleNode};
 pub use serializedfile::SerializedFile;
 pub use classes::gameobject::GameObject;
 pub use classes::transform::Transform;

@@ -54,6 +54,27 @@ pub struct SerializedFile {
 }
 
 impl SerializedFile {
+    pub fn metadata_extent(head: &[u8]) -> Option<u64> {
+        if head.len() < 20 {
+            return None;
+        }
+        let be = |o: usize| u32::from_be_bytes([head[o], head[o + 1], head[o + 2], head[o + 3]]) as u64;
+        let (metadata_size, file_size, version) = (be(0), be(4), be(8));
+        if version == 0 || version > 100 {
+            return None;
+        }
+        if version < 9 {
+            return Some(file_size);
+        }
+        if version >= 22 {
+            if head.len() < 24 {
+                return None;
+            }
+            return Some(48 + be(20));
+        }
+        Some(20 + metadata_size)
+    }
+
     pub fn read(reader: &mut Reader) -> Self {
         let _original_endian = reader.endian;
         reader.endian = Endian::Big;
