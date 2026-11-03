@@ -12,6 +12,7 @@ pub mod classes;
 pub mod common_string;
 pub mod assets;
 pub mod extractor;
+pub mod export;
 
 pub use unity_version::UnityVersion;
 pub use reader::Reader;
