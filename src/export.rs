@@ -997,7 +997,7 @@ fn extract_texture2d(
     if image_data.is_empty() {
         return false;
     }
-    if let Some(rgba_data) = decompress_texture(width, height, format, &image_data) {
+    if let Some(rgba_data) = decompress_texture(width, height, format, &image_data, true) {
         let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
         let filename = if safe_name.is_empty() {
             "texture.png".to_string()
@@ -1351,7 +1351,7 @@ fn dump_asset_as_json(
     }
 }
 
-fn unity_value_to_json(value: &UnityValue) -> serde_json::Value {
+pub fn unity_value_to_json(value: &UnityValue) -> serde_json::Value {
     match value {
         UnityValue::Boolean(b) => serde_json::Value::Bool(*b),
         UnityValue::Int8(i) => serde_json::Value::Number(serde_json::Number::from(*i)),
