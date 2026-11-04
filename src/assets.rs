@@ -1,10 +1,15 @@
 use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
+use crate::bundle::BundleFile;
 use crate::serializedfile::SerializedFile;
 use crate::objectreader::ObjectReader;
+use crate::reader::{ByteSource, Endian, Reader};
+use crate::unity_version::UnityVersion;
 
 pub struct AssetManager {
     pub files: HashMap<String, SerializedFile>,
-    pub raw_files: HashMap<String, Vec<u8>>,
+    pub raw_files: HashMap<String, ByteSource>,
     pub simplified_files: HashMap<String, String>,
 }
 
@@ -23,8 +28,66 @@ impl AssetManager {
         self.files.insert(name, file);
     }
 
-    pub fn add_raw_file(&mut self, name: String, data: Vec<u8>) {
-        self.raw_files.insert(name, data);
+    pub fn add_raw_file(&mut self, name: String, data: impl Into<ByteSource>) {
+        self.raw_files.insert(name, data.into());
+    }
+
+    pub fn from_source(data: ByteSource, name: &str) -> Result<Self, String> {
+        let mut manager = Self::new();
+        if data.starts_with(b"UnityFS") {
+            let bundle = BundleFile::open(data)?;
+            for (i, node) in bundle.nodes.iter().enumerate() {
+                let bytes = bundle.read_node(i)?;
+                if node.is_raw_stream() {
+                    manager.add_raw_file(node.name.clone(), bytes);
+                } else if bytes.len() > 20 {
+                    let sf = SerializedFile::read(&mut Reader::new(bytes, bundle.engine_version.clone()));
+                    manager.add_file(node.name.clone(), sf);
+                }
+            }
+        } else if crate::metadata::looks_like_serialized_file(&data) {
+            manager.add_serialized_file(name.to_string(), data);
+        } else {
+            return Err("not a Unity bundle or SerializedFile".to_string());
+        }
+        Ok(manager)
+    }
+
+    pub fn from_bytes(data: Vec<u8>, name: &str) -> Result<Self, String> {
+        Self::from_source(data.into(), name)
+    }
+
+    pub fn open_path<P: AsRef<Path>>(path: P) -> Result<Self, String> {
+        let path = path.as_ref();
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut manager = Self::from_source(map_file(path)?, &name)?;
+        if !manager.files.is_empty() && manager.raw_files.is_empty() {
+            if let Some(dir) = path.parent() {
+                manager.add_resource_siblings(dir, &name);
+            }
+        }
+        Ok(manager)
+    }
+
+    pub fn add_serialized_file(&mut self, name: String, data: ByteSource) {
+        let mut reader = Reader { data, pos: 0, endian: Endian::Big, unity_version: UnityVersion::default() };
+        let sf = SerializedFile::read(&mut reader);
+        self.add_file(name, sf);
+    }
+
+    pub fn add_resource_siblings(&mut self, dir: &Path, name: &str) {
+        let stem = name.split('.').next().unwrap_or(name).to_lowercase();
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let lower = file_name.to_lowercase();
+            if !(lower.ends_with(".ress") || lower.ends_with(".resource")) || lower.split('.').next() != Some(stem.as_str()) {
+                continue;
+            }
+            if let Ok(data) = map_file(&entry.path()) {
+                self.add_raw_file(file_name, data);
+            }
+        }
     }
 
     pub fn get_object(&self, file_name: &str, path_id: i64) -> Option<&ObjectReader> {
@@ -123,6 +186,15 @@ impl<'a> GameObjectNode<'a> {
         }
         children
     }
+}
+
+fn map_file(path: &Path) -> Result<ByteSource, String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    if file.metadata().map(|m| m.len() == 0).unwrap_or(false) {
+        return Ok(Vec::new().into());
+    }
+    let mmap = unsafe { memmap2::Mmap::map(&file) }.map_err(|e| format!("{}: {}", path.display(), e))?;
+    Ok(ByteSource::Mmap(Arc::new(mmap)))
 }
 
 fn simplify_name(name: &str) -> String {

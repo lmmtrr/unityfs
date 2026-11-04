@@ -22,6 +22,14 @@ if is_unity_bundle(&bundle_bytes) {
 }
 ```
 
+Raw SerializedFiles such as `sharedassets0.assets` or `level0` are also supported. When opened from a path, sibling `.resS` and `.resource` files are loaded automatically:
+
+```rust
+use unityfs::{is_unity_file, extract_unity_assets_from_path};
+
+extract_unity_assets_from_path("Game_Data/sharedassets0.assets", "extracted_output/").unwrap();
+```
+
 ## Acknowledgement
 
 - [UnityPy](https://github.com/K0lb3/UnityPy)

@@ -2,10 +2,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use crate::assets::AssetManager;
-use crate::serializedfile::SerializedFile;
 use crate::value::UnityValue;
-use crate::Reader;
-use crate::Bundle;
 use crate::classes::TryFromUnityValue;
 
 pub fn is_unity_bundle(data: &[u8]) -> bool {
@@ -722,41 +719,21 @@ fn save_png<P: AsRef<Path>>(path: P, data: &[u8], width: u32, height: u32) -> Re
     Ok(())
 }
 
+pub fn is_unity_file(data: &[u8]) -> bool {
+    is_unity_bundle(data) || crate::metadata::looks_like_serialized_file(data)
+}
+
 pub fn extract_unity_assets<P: AsRef<Path>>(bundle_bytes: &[u8], out_dir: P) -> Result<Vec<PathBuf>, String> {
     let out_dir = out_dir.as_ref();
     fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
-    let mut reader = Reader::new(bundle_bytes.to_vec(), crate::unity_version::UnityVersion::default());
-    let bundle = Bundle::read(&mut reader).map_err(|e| format!("Failed to read bundle: {}", e))?;
-    let mut asset_manager = AssetManager::new();
-    for entry in bundle.files {
-        if entry.name.ends_with(".resS") || entry.name.ends_with(".resource") {
-            asset_manager.add_raw_file(entry.name, entry.data);
-        } else if entry.data.len() > 20 {
-            let mut sf_reader = Reader::new(entry.data, bundle.engine_version.clone());
-            let sf = SerializedFile::read(&mut sf_reader);
-            asset_manager.add_file(entry.name, sf);
-        }
-    }
+    let asset_manager = AssetManager::from_bytes(bundle_bytes.to_vec(), "data.assets").map_err(|e| format!("Failed to read file: {}", e))?;
     extract_assets_internal(asset_manager, out_dir)
 }
 
 pub fn extract_unity_assets_from_path<P: AsRef<Path>, Q: AsRef<Path>>(bundle_path: P, out_dir: Q) -> Result<Vec<PathBuf>, String> {
     let out_dir = out_dir.as_ref();
     fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
-    let file = File::open(bundle_path).map_err(|e| format!("Failed to open bundle file: {}", e))?;
-    let mmap = unsafe { memmap2::Mmap::map(&file).map_err(|e| format!("Failed to mmap bundle file: {}", e))? };
-    let mut reader = Reader::new_mmap(mmap, crate::unity_version::UnityVersion::default());
-    let bundle = Bundle::read(&mut reader).map_err(|e| format!("Failed to read bundle: {}", e))?;
-    let mut asset_manager = AssetManager::new();
-    for entry in bundle.files {
-        if entry.name.ends_with(".resS") || entry.name.ends_with(".resource") {
-            asset_manager.add_raw_file(entry.name, entry.data);
-        } else if entry.data.len() > 20 {
-            let mut sf_reader = Reader::new(entry.data, bundle.engine_version.clone());
-            let sf = SerializedFile::read(&mut sf_reader);
-            asset_manager.add_file(entry.name, sf);
-        }
-    }
+    let asset_manager = AssetManager::open_path(bundle_path).map_err(|e| format!("Failed to read file: {}", e))?;
     extract_assets_internal(asset_manager, out_dir)
 }
 

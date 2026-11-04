@@ -19,6 +19,12 @@ impl std::ops::Deref for ByteSource {
     }
 }
 
+impl From<Vec<u8>> for ByteSource {
+    fn from(data: Vec<u8>) -> Self {
+        ByteSource::Heap(Arc::from(data))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Endian {
     Big,

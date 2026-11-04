@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::path::{Path, PathBuf};
 use crate::assets::AssetManager;
 use crate::classes::TryFromUnityValue;
@@ -26,25 +25,12 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
         .file_stem()
         .unwrap_or_else(|| std::ffi::OsStr::new("bundle"))
         .to_string_lossy();
-    let file = File::open(file_path).map_err(|e| format!("{}: {}", file_path.display(), e))?;
-    let mmap = unsafe { memmap2::Mmap::map(&file) }.map_err(|e| format!("{}: {}", file_path.display(), e))?;
-    let mut reader = crate::Reader::new_mmap(mmap, crate::UnityVersion::default());
-    let bundle = crate::Bundle::read(&mut reader).map_err(|e| format!("{}: {}", file_path.display(), e))?;
+    let asset_manager = AssetManager::open_path(file_path).map_err(|e| format!("{}: {}", file_path.display(), e))?;
     let bundle_output_dir = if options.by_file {
         out_dir.join(file_stem.as_ref())
     } else {
         out_dir.to_path_buf()
     };
-    let mut asset_manager = AssetManager::new();
-    for entry in &bundle.files {
-        if entry.name.ends_with(".resS") || entry.name.ends_with(".resource") {
-            asset_manager.add_raw_file(entry.name.clone(), entry.data.clone());
-        } else if entry.data.len() > 20 {
-            let mut sf_reader = crate::Reader::new(entry.data.clone(), bundle.engine_version.clone());
-            let sf = crate::SerializedFile::read(&mut sf_reader);
-            asset_manager.add_file(entry.name.clone(), sf);
-        }
-    }
     let flat = true;
     let pose_parts = std::sync::Mutex::new(Vec::new());
     let moc_stem = std::sync::Mutex::new(None);
