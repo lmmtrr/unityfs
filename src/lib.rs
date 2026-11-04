@@ -25,4 +25,4 @@ pub use classes::gameobject::GameObject;
 pub use classes::transform::Transform;
 pub use classes::texture2d::Texture2D;
 pub use assets::AssetManager;
-pub use extractor::{is_unity_bundle, is_unity_file, decompress_texture, extract_unity_assets, extract_unity_assets_from_path};
+pub use extractor::{is_unity_bundle, is_unity_file, decompress_texture, extract_unity_assets, extract_unity_assets_with_resources, extract_unity_assets_from_path};

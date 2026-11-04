@@ -76,12 +76,13 @@ impl AssetManager {
     }
 
     pub fn add_resource_siblings(&mut self, dir: &Path, name: &str) {
-        let stem = name.split('.').next().unwrap_or(name).to_lowercase();
+        let name = name.to_lowercase();
+        let stem = name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s);
+        let candidates = [format!("{}.ress", name), format!("{}.resource", name), format!("{}.resource", stem)];
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         for entry in entries.flatten() {
             let file_name = entry.file_name().to_string_lossy().into_owned();
-            let lower = file_name.to_lowercase();
-            if !(lower.ends_with(".ress") || lower.ends_with(".resource")) || lower.split('.').next() != Some(stem.as_str()) {
+            if !candidates.contains(&file_name.to_lowercase()) {
                 continue;
             }
             if let Ok(data) = map_file(&entry.path()) {

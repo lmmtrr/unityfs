@@ -726,7 +726,17 @@ pub fn is_unity_file(data: &[u8]) -> bool {
 pub fn extract_unity_assets<P: AsRef<Path>>(bundle_bytes: &[u8], out_dir: P) -> Result<Vec<PathBuf>, String> {
     let out_dir = out_dir.as_ref();
     fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
-    let asset_manager = AssetManager::from_bytes(bundle_bytes.to_vec(), "data.assets").map_err(|e| format!("Failed to read file: {}", e))?;
+    extract_unity_assets_with_resources(bundle_bytes, "data.assets", Vec::new(), out_dir)
+}
+
+pub fn extract_unity_assets_with_resources<P: AsRef<Path>>(data: &[u8], name: &str, resources: Vec<(String, Vec<u8>)>, out_dir: P) -> Result<Vec<PathBuf>, String> {
+    let out_dir = out_dir.as_ref();
+    fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
+    let mut asset_manager = AssetManager::from_bytes(data.to_vec(), name).map_err(|e| format!("Failed to read file: {}", e))?;
+    for (resource_name, resource_data) in resources {
+        let resource_name = resource_name.rsplit(['/', '\\']).next().unwrap_or(&resource_name).to_string();
+        asset_manager.add_raw_file(resource_name, resource_data);
+    }
     extract_assets_internal(asset_manager, out_dir)
 }
 
