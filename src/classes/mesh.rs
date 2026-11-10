@@ -1,5 +1,6 @@
 use crate::define_unity_class;
 use crate::math::Matrix4x4;
+use crate::unity_version::UnityVersion;
 
 define_unity_class!(ChannelInfo {
     stream: u8,
@@ -128,6 +129,37 @@ define_unity_class!(Mesh {
 });
 
 impl Mesh {
+    pub fn read(value: &crate::value::UnityValue, version: &UnityVersion) -> Result<Self, String> {
+        let mut mesh = <Self as crate::classes::TryFromUnityValue>::try_from_unity_value(value)?;
+        mesh.normalize_channels(version.major());
+        Ok(mesh)
+    }
+
+    fn normalize_channels(&mut self, major: u16) {
+        if major == 0 || major >= 2019 {
+            return;
+        }
+        let channels = &mut self.m_VertexData.m_Channels;
+        for ch in channels.iter_mut() {
+            ch.format = match (major >= 2017, ch.format) {
+                (_, f @ 0..=2) => f,
+                (true, f @ 3..=12) => f - 1,
+                (false, 3) => 6,
+                (false, 4) => 10,
+                _ => u8::MAX,
+            };
+        }
+        if major < 5 || major >= 2018 || channels.len() != 8 {
+            return;
+        }
+        if channels[2].format == 2 && channels[2].dimension & 0xF != 0 {
+            channels[2].dimension = (channels[2].dimension & 0xF0) | 4;
+        }
+        let tangent = channels.remove(7);
+        channels.insert(2, tangent);
+        channels.extend((0..6).map(|_| ChannelInfo { stream: 0, offset: 0, format: 0, dimension: 0 }));
+    }
+
     pub fn get_vertex_count(&self) -> usize {
         let count = self.m_VertexData.m_VertexCount as usize;
         if count == 0 {
@@ -299,7 +331,28 @@ impl Mesh {
         })
     }
 
+    pub fn read_int_component(format: u8, b: &[u8]) -> Option<u32> {
+        let b2 = |b: &[u8]| -> Option<[u8; 2]> { b.get(..2)?.try_into().ok() };
+        let b4 = |b: &[u8]| -> Option<[u8; 4]> { b.get(..4)?.try_into().ok() };
+        Some(match format {
+            0 => f32::from_le_bytes(b4(b)?) as u32,
+            1 => f16_to_f32(u16::from_le_bytes(b2(b)?)) as u32,
+            2 | 3 | 6 | 7 => *b.first()? as u32,
+            4 | 5 | 8 | 9 => u16::from_le_bytes(b2(b)?) as u32,
+            10 | 11 => u32::from_le_bytes(b4(b)?),
+            _ => return None,
+        })
+    }
+
     pub fn read_channel(&self, channel: usize) -> Result<(usize, Vec<f32>), String> {
+        self.read_channel_with(channel, Self::read_component)
+    }
+
+    pub fn read_int_channel(&self, channel: usize) -> Result<(usize, Vec<u32>), String> {
+        self.read_channel_with(channel, Self::read_int_component)
+    }
+
+    fn read_channel_with<T>(&self, channel: usize, read: fn(u8, &[u8]) -> Option<T>) -> Result<(usize, Vec<T>), String> {
         let ch = self.m_VertexData.m_Channels.get(channel).ok_or_else(|| format!("Channel {} not found", channel))?;
         let dim = (ch.dimension & 0xF) as usize;
         if dim == 0 {
@@ -319,7 +372,7 @@ impl Mesh {
             for c in 0..dim {
                 let at = base + c * size;
                 let bytes = data.get(at..at + size).ok_or("Out of bounds")?;
-                out.push(Self::read_component(ch.format, bytes).ok_or("Out of bounds")?);
+                out.push(read(ch.format, bytes).ok_or("Out of bounds")?);
             }
         }
         Ok((dim, out))
@@ -493,14 +546,14 @@ impl Mesh {
                 }
             }
         }
-        let (dim, values) = self.read_channel(13)?;
+        let (dim, values) = self.read_int_channel(13)?;
         let count = self.m_VertexData.m_VertexCount as usize;
         if dim == 0 {
             return Ok(vec![[0, 0, 0, 0]; count]);
         }
         Ok(values
             .chunks_exact(dim)
-            .map(|v| std::array::from_fn(|k| v.get(k).map_or(0, |x| *x as u32)))
+            .map(|v| std::array::from_fn(|k| v.get(k).copied().unwrap_or(0)))
             .collect())
     }
 }
@@ -510,11 +563,8 @@ pub fn f16_to_f32(h: u16) -> f32 {
     let exp = ((h >> 10) & 0x1f) as u32;
     let frac = (h & 0x3ff) as u32;
     if exp == 0 {
-        if frac == 0 {
-            f32::from_bits(sign << 31)
-        } else {
-            f32::from_bits((sign << 31) | ((frac + 0x3f800) << 13))
-        }
+        let value = frac as f32 / 16777216.0;
+        if sign == 1 { -value } else { value }
     } else if exp == 0x1f {
         f32::from_bits((sign << 31) | 0x7f800000 | (frac << 13))
     } else {

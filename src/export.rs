@@ -58,7 +58,7 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
             let success = match class_id {
                 28 => extract_texture2d(&unity_value, &bundle_output_dir, &asset_manager, flat, pb),
                 49 => extract_text_asset(&unity_value, &bundle_output_dir, flat, pb),
-                43 => extract_mesh(&unity_value, &bundle_output_dir, flat, pb),
+                43 => extract_mesh(&unity_value, &sf.unity_version, &bundle_output_dir, flat, pb),
                 83 => extract_audioclip(&unity_value, &bundle_output_dir, &asset_manager, flat, pb),
                 48 => extract_shader(&unity_value, &bundle_output_dir, flat, pb),
                 329 => extract_videoclip(&unity_value, &bundle_output_dir, &asset_manager, flat, pb),
@@ -1031,12 +1031,12 @@ fn extract_texture2d(
     }
 }
 
-fn extract_mesh(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log) -> bool {
+fn extract_mesh(val: &UnityValue, version: &crate::unity_version::UnityVersion, output_dir: &Path, by_file: bool, pb: &Log) -> bool {
     let name = match val.get("m_Name") {
         Some(UnityValue::String(s)) if !s.is_empty() => s.clone(),
         _ => "mesh".to_string(),
     };
-    if let Ok(mesh) = Mesh::try_from_unity_value(val) {
+    if let Ok(mesh) = Mesh::read(val, version) {
         let vertices = mesh.get_vertices().unwrap_or_default();
         let indices = mesh.get_indices().unwrap_or_default();
         let uvs = mesh.extract_uvs().unwrap_or_default();
