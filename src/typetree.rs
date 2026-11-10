@@ -119,7 +119,9 @@ impl<'a> TypeTreeReader<'a> {
                 UnityValue::Map(map)
             },
             _ => {
-                if *index + 1 < nodes.len() && nodes[*index + 1].m_Type == "Array" {
+                if self.class_id == 83 && node.m_Name == "m_AudioData" && *index + 1 < nodes.len() && nodes[*index + 1].m_Type == "Array" {
+                    self.read_audio_data(nodes, index)
+                } else if *index + 1 < nodes.len() && nodes[*index + 1].m_Type == "Array" {
                     self.read_array(nodes, index)
                 } else if node.m_Type.starts_with("PPtr<") {
                     self.read_pptr(nodes, index)
@@ -132,6 +134,21 @@ impl<'a> TypeTreeReader<'a> {
             self.reader.align(4);
         }
         res
+    }
+
+    fn read_audio_data(&mut self, nodes: &[TypeTreeNode], index: &mut usize) -> UnityValue {
+        *index = self.get_node_end(nodes, *index) - 1;
+        let size = self.reader.read_i32().max(0) as usize;
+        let remaining = self.obj_end.saturating_sub(self.reader.pos);
+        if size <= remaining {
+            return UnityValue::Bytes(self.reader.read_bytes(size));
+        }
+        let mut map = BTreeMap::new();
+        map.insert("m_Size".to_string(), UnityValue::UInt32(size as u32));
+        if remaining >= 4 {
+            map.insert("m_Offset".to_string(), UnityValue::UInt32(self.reader.read_u32()));
+        }
+        UnityValue::Map(map)
     }
 
     fn read_array(&mut self, nodes: &[TypeTreeNode], index: &mut usize) -> UnityValue {

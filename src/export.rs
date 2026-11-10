@@ -59,7 +59,7 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
                 28 => extract_texture2d(&unity_value, &sf.unity_version, &bundle_output_dir, &asset_manager, flat, pb),
                 49 => extract_text_asset(&unity_value, &bundle_output_dir, flat, pb),
                 43 => extract_mesh(&unity_value, &sf.unity_version, &bundle_output_dir, flat, pb),
-                83 => extract_audioclip(&unity_value, &bundle_output_dir, &asset_manager, flat, pb),
+                83 => extract_audioclip(&unity_value, &bundle_output_dir, &asset_manager, asset_name, flat, pb),
                 48 => extract_shader(&unity_value, &bundle_output_dir, flat, pb),
                 329 => extract_videoclip(&unity_value, &bundle_output_dir, &asset_manager, flat, pb),
                 114 => {
@@ -1113,6 +1113,7 @@ fn extract_audioclip(
     val: &UnityValue,
     output_dir: &Path,
     asset_manager: &AssetManager,
+    file_name: &str,
     by_file: bool,
     pb: &Log,
 ) -> bool {
@@ -1120,64 +1121,11 @@ fn extract_audioclip(
         Some(UnityValue::String(s)) if !s.is_empty() => s.clone(),
         _ => "audio".to_string(),
     };
-    let mut audio_data = Vec::new();
-    let mut has_stream = false;
-    if let Some(UnityValue::Map(res_map)) = val.get("m_Resource") {
-        let offset = res_map.get("m_Offset").and_then(|v| match v {
-            UnityValue::UInt64(o) => Some(*o),
-            UnityValue::Int64(o) => Some(*o as u64),
-            UnityValue::UInt32(o) => Some(*o as u64),
-            UnityValue::Int32(o) => Some(*o as u64),
-            _ => None,
-        });
-        let size = res_map.get("m_Size").and_then(|v| match v {
-            UnityValue::UInt64(s) => Some(*s as u32),
-            UnityValue::Int64(s) => Some(*s as u32),
-            UnityValue::UInt32(s) => Some(*s),
-            UnityValue::Int32(s) => Some(*s as u32),
-            _ => None,
-        });
-        let path = res_map.get("m_Source").and_then(|v| match v {
-            UnityValue::String(s) => Some(s.clone()),
-            _ => None,
-        });
-        if let (Some(o), Some(s), Some(p)) = (offset, size, path) {
-            if s > 0 {
-                let stream_name = p.rsplit('/').next().unwrap_or(&p);
-                if let Some(raw_data) = asset_manager.raw_files.get(stream_name) {
-                    let start = o as usize;
-                    let end = start + s as usize;
-                    if end <= raw_data.len() {
-                        audio_data = raw_data[start..end].to_vec();
-                        has_stream = true;
-                    }
-                }
-            }
-        }
-    }
-    if !has_stream {
-        if let Some(UnityValue::Bytes(b)) = val.get("m_AudioData") {
-            audio_data = b.clone();
-        }
-    }
+    let audio_data = crate::classes::audioclip::playable(crate::classes::audioclip::audio_bytes(val, asset_manager, file_name));
     if audio_data.is_empty() {
         return false;
     }
-    let extension = if audio_data.starts_with(b"OggS") {
-        "ogg"
-    } else if audio_data.starts_with(b"RIFF") {
-        "wav"
-    } else if audio_data.len() >= 8 && &audio_data[4..8] == b"ftyp" {
-        "m4a"
-    } else if audio_data.starts_with(b"ID3") || audio_data.starts_with(&[0xFF, 0xFB]) {
-        "mp3"
-    } else if audio_data.starts_with(b"MThd") {
-        "mid"
-    } else if audio_data.starts_with(b"FSB5") {
-        "fsb"
-    } else {
-        "bytes"
-    };
+    let extension = crate::classes::audioclip::extension(&audio_data);
     let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
     let filename = if safe_name.is_empty() {
         format!("audio.{}", extension)

@@ -5,6 +5,7 @@ pub mod texture2d;
 pub mod mesh;
 pub mod skinned_mesh_renderer;
 pub mod videoclip;
+pub mod audioclip;
 
 use crate::value::UnityValue;
 use std::collections::BTreeMap;

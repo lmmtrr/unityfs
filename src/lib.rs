@@ -14,6 +14,7 @@ pub mod assets;
 pub mod extractor;
 pub mod export;
 pub mod metadata;
+pub mod fsb5;
 
 pub use unity_version::UnityVersion;
 pub use reader::Reader;
