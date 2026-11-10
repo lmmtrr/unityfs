@@ -6,6 +6,7 @@ pub mod mesh;
 pub mod skinned_mesh_renderer;
 pub mod videoclip;
 pub mod audioclip;
+pub mod font;
 
 use crate::value::UnityValue;
 use std::collections::BTreeMap;

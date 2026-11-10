@@ -119,8 +119,8 @@ impl<'a> TypeTreeReader<'a> {
                 UnityValue::Map(map)
             },
             _ => {
-                if self.class_id == 83 && node.m_Name == "m_AudioData" && *index + 1 < nodes.len() && nodes[*index + 1].m_Type == "Array" {
-                    self.read_audio_data(nodes, index)
+                if ((self.class_id == 83 && node.m_Name == "m_AudioData") || (self.class_id == 128 && node.m_Name == "m_FontData")) && *index + 1 < nodes.len() && nodes[*index + 1].m_Type == "Array" {
+                    self.read_byte_vector(nodes, index)
                 } else if *index + 1 < nodes.len() && nodes[*index + 1].m_Type == "Array" {
                     self.read_array(nodes, index)
                 } else if node.m_Type.starts_with("PPtr<") {
@@ -136,7 +136,7 @@ impl<'a> TypeTreeReader<'a> {
         res
     }
 
-    fn read_audio_data(&mut self, nodes: &[TypeTreeNode], index: &mut usize) -> UnityValue {
+    fn read_byte_vector(&mut self, nodes: &[TypeTreeNode], index: &mut usize) -> UnityValue {
         *index = self.get_node_end(nodes, *index) - 1;
         let size = self.reader.read_i32().max(0) as usize;
         let remaining = self.obj_end.saturating_sub(self.reader.pos);

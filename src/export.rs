@@ -39,7 +39,7 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
         for obj in &sf.objects {
             let class_id = obj.class_id;
             let supported = match class_id {
-                28 | 49 | 43 | 83 | 48 | 329 | 114 => true,
+                28 | 49 | 43 | 83 | 48 | 128 | 329 | 114 => true,
                 1 | 4 | 21 | 74 | 115 => options.metadata,
                 _ => false,
             };
@@ -60,6 +60,7 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
                 49 => extract_text_asset(&unity_value, &bundle_output_dir, flat, pb),
                 43 => extract_mesh(&unity_value, &sf.unity_version, &bundle_output_dir, flat, pb),
                 83 => extract_audioclip(&unity_value, &bundle_output_dir, &asset_manager, asset_name, flat, pb),
+                128 => extract_font(&unity_value, &bundle_output_dir, flat, pb),
                 48 => extract_shader(&unity_value, &bundle_output_dir, flat, pb),
                 329 => extract_videoclip(&unity_value, &bundle_output_dir, &asset_manager, flat, pb),
                 114 => {
@@ -1147,6 +1148,28 @@ fn extract_audioclip(
                 true
             }
         }
+        UniquePathResult::Exists(_) => true,
+    }
+}
+
+fn extract_font(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log) -> bool {
+    let Some(data) = crate::classes::font::font_data(val) else { return false };
+    let name = match val.get("m_Name") {
+        Some(UnityValue::String(s)) if !s.is_empty() => s.clone(),
+        _ => "font".to_string(),
+    };
+    let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
+    let filename = format!("{}.{}", if safe_name.is_empty() { "font" } else { &safe_name }, crate::classes::font::extension(data));
+    let font_dir = if by_file { output_dir.to_path_buf() } else { output_dir.join("Font") };
+    let _ = std::fs::create_dir_all(&font_dir);
+    match get_unique_path(&font_dir, &filename, Some(data)) {
+        UniquePathResult::New(dest) => match std::fs::write(&dest, data) {
+            Ok(()) => true,
+            Err(e) => {
+                pb.println(format!("    Failed to write Font '{}': {}", dest.display(), e));
+                false
+            }
+        },
         UniquePathResult::Exists(_) => true,
     }
 }
