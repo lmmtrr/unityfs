@@ -219,12 +219,6 @@ fn find_and_extract_criware_bytes(
                     match item {
                         UnityValue::UInt8(b) => bytes.push(*b),
                         UnityValue::Int8(b) => bytes.push(*b as u8),
-                        UnityValue::UInt16(b) => bytes.push(*b as u8),
-                        UnityValue::Int16(b) => bytes.push(*b as u8),
-                        UnityValue::UInt32(b) => bytes.push(*b as u8),
-                        UnityValue::Int32(b) => bytes.push(*b as u8),
-                        UnityValue::UInt64(b) => bytes.push(*b as u8),
-                        UnityValue::Int64(b) => bytes.push(*b as u8),
                         _ => {
                             is_byte_array = false;
                             break;
@@ -287,7 +281,7 @@ fn get_mono_behaviour_class_name(
     None
 }
 
-fn resolve_class_name(
+pub(crate) fn resolve_class_name(
     value: &UnityValue,
     asset_manager: &AssetManager,
     asset_name: &str,

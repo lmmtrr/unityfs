@@ -59,12 +59,6 @@ fn find_and_extract_criware_bytes_lib(
                     match item {
                         UnityValue::UInt8(b) => bytes.push(*b),
                         UnityValue::Int8(b) => bytes.push(*b as u8),
-                        UnityValue::UInt16(b) => bytes.push(*b as u8),
-                        UnityValue::Int16(b) => bytes.push(*b as u8),
-                        UnityValue::UInt32(b) => bytes.push(*b as u8),
-                        UnityValue::Int32(b) => bytes.push(*b as u8),
-                        UnityValue::UInt64(b) => bytes.push(*b as u8),
-                        UnityValue::Int64(b) => bytes.push(*b as u8),
                         _ => {
                             is_byte_array = false;
                             break;
@@ -477,7 +471,7 @@ fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Resul
             }
             let mut is_cubism_pose_part = false;
             if class_id == 114 {
-                if let Some(class_name) = resolve_class_name(&value, &asset_manager, asset_name) {
+                if let Some(class_name) = crate::export::resolve_class_name(&value, &asset_manager, asset_name) {
                     if class_name == "CubismPosePart" {
                         is_cubism_pose_part = true;
                     }
@@ -527,7 +521,7 @@ fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Resul
                         _ => None,
                     };
                 } else {
-                    if let Some(class_name) = resolve_class_name(&value, &asset_manager, asset_name) {
+                    if let Some(class_name) = crate::export::resolve_class_name(&value, &asset_manager, asset_name) {
                         if class_name == "CubismFadeMotionData" {
                             is_cubism_fade_motion = true;
                         } else if class_name == "CubismExpressionData" {
@@ -824,40 +818,7 @@ fn flatten_json_paths(value: &mut serde_json::Value) {
     }
 }
 
-fn get_mono_behaviour_class_name(asset_manager: &AssetManager, source_file_name: &str, m_script_pptr: &UnityValue) -> Option<String> {
-    if let UnityValue::PPtr { file_id, path_id } = m_script_pptr {
-        if let Ok(script_val) = asset_manager.read_object_value(source_file_name, *file_id, *path_id) {
-            if let Some(UnityValue::String(class_name)) = script_val.get("m_ClassName") {
-                return Some(class_name.clone());
-            }
-        }
-    }
-    None
-}
 
-fn resolve_class_name(
-    value: &UnityValue,
-    asset_manager: &AssetManager,
-    asset_name: &str,
-) -> Option<String> {
-    if let Some(script_pptr) = value.get("m_Script") {
-        if let Some(class_name) = get_mono_behaviour_class_name(asset_manager, asset_name, script_pptr) {
-            return Some(class_name);
-        }
-    }
-    if value.get("ParameterIds").is_some() && value.get("ParameterCurves").is_some() {
-        return Some("CubismFadeMotionData".to_string());
-    }
-    if value.get("Parameters").is_some() && value.get("FadeInTime").is_some() && value.get("FadeOutTime").is_some() {
-        if value.get("ParameterIds").is_none() {
-            return Some("CubismExpressionData".to_string());
-        }
-    }
-    if value.get("GroupIndex").is_some() && value.get("Link").is_some() && value.get("m_GameObject").is_some() {
-        return Some("CubismPosePart".to_string());
-    }
-    None
-}
 
 struct Keyframe {
     time: f32,

@@ -167,6 +167,19 @@ impl<'a> TypeTreeReader<'a> {
         let align_array = (nodes[array_node_index].m_MetaFlag & 0x4000) != 0;
         *index += 2;
         let size = self.reader.read_i32();
+        let byte_element = nodes.get(array_node_index + 2).is_some_and(|e| matches!(e.m_Type.as_str(), "UInt8" | "SInt8" | "char")) && array_node_index + 3 == end;
+        if self.class_id == 114 && byte_element {
+            *index = end - 1;
+            if size < 0 || size as usize > self.obj_end.saturating_sub(self.reader.pos) {
+                self.reader.pos = self.obj_end.min(self.reader.data.len());
+                return UnityValue::Null;
+            }
+            let bytes = self.reader.read_bytes(size as usize);
+            if align_array {
+                self.reader.align(4);
+            }
+            return UnityValue::Bytes(bytes);
+        }
         if size < 0 || size > 10_000_000 {
             *index = end - 1;
             return UnityValue::Null;
@@ -421,6 +434,19 @@ impl<'a> TypeTreeReader<'a> {
         let align_array = (nodes[array_node_index].m_MetaFlag & 0x4000) != 0;
         *index += 2;
         let size = self.reader.read_i32();
+        let byte_element = nodes.get(array_node_index + 2).is_some_and(|e| matches!(e.m_Type.as_str(), "UInt8" | "SInt8" | "char")) && array_node_index + 3 == end;
+        if byte_element {
+            *index = end - 1;
+            if size < 0 || size as usize > self.obj_end.saturating_sub(self.reader.pos) {
+                self.reader.pos = self.obj_end.min(self.reader.data.len());
+                return;
+            }
+            self.reader.pos += size as usize;
+            if align_array {
+                self.reader.align(4);
+            }
+            return;
+        }
         if size < 0 || size > 10_000_000 {
             *index = end - 1;
             return;
