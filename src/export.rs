@@ -56,7 +56,7 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
                 }
             };
             let success = match class_id {
-                28 => extract_texture2d(&unity_value, &bundle_output_dir, &asset_manager, flat, pb),
+                28 => extract_texture2d(&unity_value, &sf.unity_version, &bundle_output_dir, &asset_manager, flat, pb),
                 49 => extract_text_asset(&unity_value, &bundle_output_dir, flat, pb),
                 43 => extract_mesh(&unity_value, &sf.unity_version, &bundle_output_dir, flat, pb),
                 83 => extract_audioclip(&unity_value, &bundle_output_dir, &asset_manager, flat, pb),
@@ -930,6 +930,7 @@ fn extract_text_asset(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &L
 
 fn extract_texture2d(
     val: &UnityValue,
+    version: &crate::unity_version::UnityVersion,
     output_dir: &Path,
     asset_manager: &AssetManager,
     by_file: bool,
@@ -997,7 +998,7 @@ fn extract_texture2d(
     if image_data.is_empty() {
         return false;
     }
-    if let Some(rgba_data) = decompress_texture(width, height, format, &image_data, true) {
+    if let Some(rgba_data) = decompress_texture(width, height, format, &image_data, version, true) {
         let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
         let filename = if safe_name.is_empty() {
             "texture.png".to_string()

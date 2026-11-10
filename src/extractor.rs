@@ -99,7 +99,7 @@ fn find_and_extract_criware_bytes_lib(
     }
 }
 
-pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: &[u8], flip_y: bool) -> Option<Vec<u8>> {
+pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: &[u8], version: &crate::unity_version::UnityVersion, flip_y: bool) -> Option<Vec<u8>> {
     let (block_w, block_h) = match format {
         10 | 11 | 12 | 24 | 25 | 26 | 27 | 34 | 35 | 36 | 41 | 42 | 43 | 44 | 45 | 46 | 47 => (4, 4),
         30 | 31 => (8, 4),
@@ -158,6 +158,9 @@ pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: 
         _ => image_data,
     };
     match format {
+        28 | 29 if version.major() != 0 && *version < (2017, 3) => {
+            success = texture2ddecoder::decode_crunch(image_data, width, height, &mut decompressed).is_ok();
+        }
         28 | 29 | 64 | 65 => {
             success = texture2ddecoder::decode_unity_crunch(image_data, width, height, &mut decompressed).is_ok();
         }
@@ -206,12 +209,6 @@ pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: 
                 let g8 = (g << 2) | (g >> 4);
                 let b8 = (b << 3) | (b >> 2);
                 decompressed[i] = u32::from_le_bytes([b8, g8, r8, 255]);
-            }
-            success = true;
-        }
-        8 => {
-            for (i, chunk) in safe_image_data.chunks_exact(3).enumerate().take(width * height) {
-                decompressed[i] = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], 255]);
             }
             success = true;
         }
@@ -278,7 +275,33 @@ pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: 
             }
             success = true;
         }
-        9 | 15 | 16 | 18 | 19 | 62 | 63 | 72 | 73 | 74 => {
+        21 => {
+            let yuv = |y: u8, u: u8, v: u8| -> [u8; 3] {
+                let (c, d, e) = (y as i32 - 16, u as i32 - 128, v as i32 - 128);
+                let clamp = |x: i32| ((x + 128) >> 8).clamp(0, 255) as u8;
+                [clamp(298 * c + 409 * e), clamp(298 * c - 100 * d - 208 * e), clamp(298 * c + 516 * d)]
+            };
+            for (i, px) in safe_image_data.chunks_exact(4).enumerate() {
+                for (k, y) in [px[0], px[2]].into_iter().enumerate() {
+                    let at = i * 2 + k;
+                    if at < width * height {
+                        let [r, g, b] = yuv(y, px[1], px[3]);
+                        decompressed[at] = u32::from_le_bytes([b, g, r, 255]);
+                    }
+                }
+            }
+            success = true;
+        }
+        22 => {
+            for (i, px) in safe_image_data.chunks_exact(4).enumerate().take(width * height) {
+                let n = u32::from_le_bytes([px[0], px[1], px[2], px[3]]);
+                let scale = 2f32.powi((n >> 27) as i32 - 24);
+                let to_u8 = |m: u32| (((m & 0x1FF) as f32 * scale).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                decompressed[i] = u32::from_le_bytes([to_u8(n >> 18), to_u8(n >> 9), to_u8(n), 255]);
+            }
+            success = true;
+        }
+        9 | 15 | 16 | 18 | 19 | 62 | 63 | 72 | 73 | 74 | 75..=82 => {
             let (channels, channel_size) = match format {
                 9 => (1, 2),
                 15 => (1, 2),
@@ -289,15 +312,23 @@ pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: 
                 63 => (1, 1),
                 72 => (2, 2),
                 73 => (3, 2),
+                74 => (4, 2),
+                75 => (1, 1),
+                76 => (2, 1),
+                77 => (3, 1),
+                78 => (4, 1),
+                79 => (1, 2),
+                80 => (2, 2),
+                81 => (3, 2),
                 _ => (4, 2),
             };
             let is_float = matches!(format, 15 | 16 | 18 | 19);
+            let sign_bit = if format >= 75 { 0x80 } else { 0 };
             let to_u8 = |c: &[u8]| -> u8 {
                 match (is_float, channel_size) {
                     (true, 2) => (crate::classes::mesh::f16_to_f32(u16::from_le_bytes([c[0], c[1]])).clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
                     (true, _) => (f32::from_le_bytes([c[0], c[1], c[2], c[3]]).clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
-                    (false, 1) => c[0],
-                    (false, _) => c[1],
+                    (false, _) => c[channel_size - 1] ^ sign_bit,
                 }
             };
             for (i, px) in safe_image_data.chunks_exact(channels * channel_size).enumerate().take(width * height) {
@@ -381,19 +412,11 @@ pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: 
         53 | 59 | 71 => {
             success = texture2ddecoder::decode_astc(safe_image_data, aligned_w, aligned_h, 12, 12, &mut decompressed).is_ok();
         }
-        _ => {
-            if safe_image_data.len() == width * height * 4 {
-                for (i, chunk) in safe_image_data.chunks_exact(4).enumerate() {
-                    decompressed[i] = u32::from_le_bytes([chunk[2], chunk[1], chunk[0], chunk[3]]);
-                }
-                success = true;
-            }
-        }
+        _ => {}
     }
     if success {
         let mut bytes = Vec::with_capacity(width * height * 4);
         let mut has_strong_alpha = false;
-        let mut non_zero_count = 0;
         for row in 0..height {
             let y = if flip_y { height - 1 - row } else { row };
             for x in 0..width {
@@ -407,14 +430,9 @@ pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: 
                 if b[3] > 50 {
                     has_strong_alpha = true;
                 }
-                if b[3] > 15 {
-                    non_zero_count += 1;
-                }
             }
         }
-        let total_pixels = width * height;
-        let threshold = total_pixels / 200;
-        if !has_strong_alpha || non_zero_count < threshold {
+        if !has_strong_alpha {
             for chunk in bytes.chunks_exact_mut(4) {
                 chunk[3] = 255;
             }
@@ -692,7 +710,7 @@ fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Resul
                 if image_data.is_empty() {
                     continue;
                 }
-                let decompressed = decompress_texture(width, height, format, &image_data, true);
+                let decompressed = decompress_texture(width, height, format, &image_data, &sf.unity_version, true);
                 if let Some(rgba_data) = decompressed {
                     let final_name = if sanitized_base.ends_with(".png") {
                         sanitized_base.clone()
