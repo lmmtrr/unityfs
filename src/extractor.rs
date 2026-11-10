@@ -617,21 +617,14 @@ fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Resul
                         let name_without = final_name.replace(".userdata3", "").replace(".userdata", "");
                         final_name = format!("{}.userdata3.json", name_without);
                     } else if !final_name.contains('.') {
-                        if data.starts_with(b"{") {
+                        if crate::export::is_json_bytes(&data) {
                             final_name = format!("{}.json", final_name);
                         } else if data.starts_with(b"MOC3") {
                             final_name = format!("{}.moc3", final_name);
+                        } else if crate::export::is_spine_binary(&data) {
+                            final_name = format!("{}.skel", final_name);
                         } else {
-                            let check_len = std::cmp::min(data.len(), 256);
-                            let head_str = String::from_utf8_lossy(&data[..check_len]);
-                            let has_spine_version = head_str.contains("3.6") || head_str.contains("3.7") ||
-                                                    head_str.contains("3.8") || head_str.contains("4.0") ||
-                                                    head_str.contains("4.1") || head_str.contains("4.2");
-                            if has_spine_version {
-                                final_name = format!("{}.skel", final_name);
-                            } else {
-                                final_name = format!("{}.txt", final_name);
-                            }
+                            final_name = format!("{}.txt", final_name);
                         }
                     }
                     let dest = out_dir.join(&final_name);

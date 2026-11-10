@@ -746,12 +746,7 @@ fn extract_monobehaviour(
             } else if data.starts_with(b"MOC3") {
                 final_name = format!("{}.moc3", final_name);
             } else {
-                let check_len = std::cmp::min(data.len(), 256);
-                let head_str = String::from_utf8_lossy(&data[..check_len]);
-                let has_spine_version = head_str.contains("3.6") || head_str.contains("3.7") ||
-                                        head_str.contains("3.8") || head_str.contains("4.0") ||
-                                        head_str.contains("4.1") || head_str.contains("4.2");
-                if has_spine_version {
+                if is_spine_binary(&data) {
                     final_name = format!("{}.skel", final_name);
                 } else {
                     final_name = format!("{}.txt", final_name);
@@ -793,7 +788,39 @@ fn extract_monobehaviour(
     }
 }
 
-fn is_json_bytes(data: &[u8]) -> bool {
+fn spine_string(data: &[u8], pos: &mut usize) -> Option<Vec<u8>> {
+    let mut n = 0usize;
+    for shift in 0..5 {
+        let b = *data.get(*pos)?;
+        *pos += 1;
+        n |= ((b & 0x7F) as usize) << (shift * 7);
+        if b & 0x80 == 0 {
+            break;
+        }
+    }
+    let len = n.checked_sub(1)?;
+    let bytes = data.get(*pos..*pos + len)?.to_vec();
+    *pos += len;
+    Some(bytes)
+}
+
+fn is_spine_version(v: &[u8]) -> bool {
+    matches!(v, [major, b'.', minor, ..] if (b'2'..=b'9').contains(major) && minor.is_ascii_digit()) && v.iter().all(|b| b.is_ascii_digit() || *b == b'.' || *b == b'-')
+}
+
+pub(crate) fn is_spine_binary(data: &[u8]) -> bool {
+    if std::str::from_utf8(data).is_ok() {
+        return false;
+    }
+    let mut pos = 0;
+    let v3 = spine_string(data, &mut pos).and_then(|_| spine_string(data, &mut pos));
+    let mut pos = 8;
+    let v4 = spine_string(data, &mut pos);
+    v3.is_some_and(|v| is_spine_version(&v)) || v4.is_some_and(|v| is_spine_version(&v))
+}
+
+pub(crate) fn is_json_bytes(data: &[u8]) -> bool {
+    let data = data.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(data);
     if let Ok(s) = std::str::from_utf8(data) {
         let trimmed = s.trim_start();
         trimmed.starts_with('{') || trimmed.starts_with('[')
@@ -896,12 +923,7 @@ fn extract_text_asset(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &L
             } else if safe_name.contains('.') {
                 safe_name
             } else {
-                let check_len = std::cmp::min(data.len(), 256);
-                let head_str = String::from_utf8_lossy(&data[..check_len]);
-                let has_spine_version = head_str.contains("3.6") || head_str.contains("3.7") ||
-                                        head_str.contains("3.8") || head_str.contains("4.0") ||
-                                        head_str.contains("4.1") || head_str.contains("4.2");
-                if has_spine_version {
+                if is_spine_binary(&data) {
                     format!("{}.skel", safe_name)
                 } else {
                     format!("{}.txt", safe_name)

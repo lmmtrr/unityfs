@@ -82,7 +82,7 @@ impl Reader {
     }
 
     pub fn read_bytes(&mut self, size: usize) -> Vec<u8> {
-        if size > 100 * 1024 * 1024 || self.pos >= self.data.len() {
+        if self.pos >= self.data.len() {
             return Vec::new();
         }
         let available = self.data.len().saturating_sub(self.pos);
@@ -196,9 +196,7 @@ impl Reader {
 
     pub fn read_string(&mut self) -> String {
         let len = self.read_i32();
-        if self.data.len() == 37352 {
-        }
-        if len <= 0 || len > 10_000_000 { return String::new(); }
+        if len <= 0 || len as usize > self.data.len().saturating_sub(self.pos) { return String::new(); }
         let bytes = self.read_bytes(len as usize);
         self.align(4);
         String::from_utf8_lossy(&bytes).into_owned()

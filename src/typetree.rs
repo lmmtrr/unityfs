@@ -54,21 +54,12 @@ impl<'a> TypeTreeReader<'a> {
             "double" => UnityValue::Double(self.reader.read_f64()),
             "ReferencedObject" => self.read_referenced_object(nodes, index),
             "string" => {
+                *index = self.get_node_end(nodes, *index) - 1;
+                let bytes = self.read_string_bytes();
                 if self.class_id == 49 && node.m_Name == "m_Script" {
-                    let len = self.reader.read_i32();
-                    let bytes = if len > 0 && len <= 100_000_000 {
-                        let b = self.reader.read_bytes(len as usize);
-                        self.reader.align(4);
-                        b
-                    } else {
-                        Vec::new()
-                    };
-                    *index = self.get_node_end(nodes, *index) - 1;
                     UnityValue::Bytes(bytes)
                 } else {
-                    let s = self.reader.read_string();
-                    *index = self.get_node_end(nodes, *index) - 1;
-                    UnityValue::String(s)
+                    UnityValue::String(String::from_utf8_lossy(&bytes).into_owned())
                 }
             },
             "TypelessData" => {
@@ -134,6 +125,24 @@ impl<'a> TypeTreeReader<'a> {
             self.reader.align(4);
         }
         res
+    }
+
+    fn skip_sized(&mut self) {
+        let len = self.reader.read_i32();
+        let remaining = self.obj_end.saturating_sub(self.reader.pos);
+        self.reader.pos = if len < 0 || len as usize > remaining { self.obj_end.min(self.reader.data.len()) } else { self.reader.pos + len as usize };
+    }
+
+    fn read_string_bytes(&mut self) -> Vec<u8> {
+        let len = self.reader.read_i32();
+        let remaining = self.obj_end.saturating_sub(self.reader.pos);
+        if len < 0 || len as usize > remaining {
+            self.reader.pos = self.obj_end.min(self.reader.data.len());
+            return Vec::new();
+        }
+        let bytes = self.reader.read_bytes(len as usize);
+        self.reader.align(4);
+        bytes
     }
 
     fn read_byte_vector(&mut self, nodes: &[TypeTreeNode], index: &mut usize) -> UnityValue {
@@ -353,18 +362,12 @@ impl<'a> TypeTreeReader<'a> {
                 self.reader.pos += 8;
             }
             "string" => {
-                let len = self.reader.read_i32();
-                if len > 0 && len < 10_000_000 {
-                    self.reader.pos += len as usize;
-                }
+                self.skip_sized();
                 self.reader.align(4);
                 *index = self.get_node_end(nodes, *index) - 1;
             }
             "TypelessData" => {
-                let len = self.reader.read_i32();
-                if len > 0 && len < 100_000_000 {
-                    self.reader.pos += len as usize;
-                }
+                self.skip_sized();
                 *index = self.get_node_end(nodes, *index) - 1;
             }
             "StreamingInfo" => {
