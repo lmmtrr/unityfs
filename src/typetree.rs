@@ -8,6 +8,7 @@ pub struct TypeTreeReader<'a> {
     pub obj_end: usize,
     pub ref_types: &'a [crate::serializedfile::RefType],
     pub class_id: i32,
+    pub skip: &'a [&'a str],
 }
 
 fn should_ignore_field(name: &str) -> bool {
@@ -16,7 +17,7 @@ fn should_ignore_field(name: &str) -> bool {
 
 impl<'a> TypeTreeReader<'a> {
     pub fn new(reader: &'a mut Reader, obj_end: usize, ref_types: &'a [crate::serializedfile::RefType], class_id: i32) -> Self {
-        Self { reader, obj_end, ref_types, class_id }
+        Self { reader, obj_end, ref_types, class_id, skip: &[] }
     }
 
     pub fn read(&mut self, nodes: &[TypeTreeNode]) -> UnityValue {
@@ -34,7 +35,7 @@ impl<'a> TypeTreeReader<'a> {
             return UnityValue::Null;
         }
         let node = &nodes[*index];
-        if should_ignore_field(node.m_Name.as_str()) {
+        if should_ignore_field(node.m_Name.as_str()) || self.skip.contains(&node.m_Name.as_str()) {
             self.skip_node(nodes, index);
             return UnityValue::Null;
         }
