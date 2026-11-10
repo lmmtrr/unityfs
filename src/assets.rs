@@ -91,6 +91,18 @@ impl AssetManager {
         }
     }
 
+    pub fn resource_slice(&self, source: &str, offset: usize, size: usize) -> Option<Vec<u8>> {
+        let name = source.rsplit(['/', '\\']).next().unwrap_or(source);
+        let raw = self.raw_files.get(name).or_else(|| self.raw_files.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v))?;
+        raw.get(offset..offset.checked_add(size)?).map(<[u8]>::to_vec)
+    }
+
+    pub fn streamed_resource(&self, res: &crate::value::UnityValue) -> Option<Vec<u8>> {
+        let field = |key: &str| res.get(key)?.as_i64().and_then(|v| usize::try_from(v).ok());
+        let size = field("m_Size").filter(|&n| n > 0)?;
+        self.resource_slice(res.get("m_Source")?.as_str()?, field("m_Offset")?, size)
+    }
+
     pub fn get_object(&self, file_name: &str, path_id: i64) -> Option<&ObjectReader> {
         self.files.get(file_name).and_then(|f| {
             f.object_map.get(&path_id).map(|&idx| &f.objects[idx])

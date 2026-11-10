@@ -119,7 +119,7 @@ impl<'a> TypeTreeReader<'a> {
                 UnityValue::Map(map)
             },
             _ => {
-                if ((self.class_id == 83 && node.m_Name == "m_AudioData") || (self.class_id == 128 && node.m_Name == "m_FontData")) && *index + 1 < nodes.len() && nodes[*index + 1].m_Type == "Array" {
+                if ((self.class_id == 83 && node.m_Name == "m_AudioData") || (self.class_id == 128 && node.m_Name == "m_FontData") || (self.class_id == 152 && node.m_Name == "m_MovieData")) && *index + 1 < nodes.len() && nodes[*index + 1].m_Type == "Array" {
                     self.read_byte_vector(nodes, index)
                 } else if *index + 1 < nodes.len() && nodes[*index + 1].m_Type == "Array" {
                     self.read_array(nodes, index)

@@ -1,22 +1,12 @@
 use crate::assets::AssetManager;
 use crate::value::UnityValue;
 
-fn raw_slice(am: &AssetManager, source: &str, offset: usize, size: usize) -> Option<Vec<u8>> {
-    let name = source.rsplit('/').next().unwrap_or(source);
-    let raw = am.raw_files.get(name).or_else(|| am.raw_files.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v))?;
-    raw.get(offset..offset.checked_add(size)?).map(<[u8]>::to_vec)
-}
-
 fn field_usize(value: &UnityValue, key: &str) -> Option<usize> {
     value.get(key)?.as_i64().and_then(|v| usize::try_from(v).ok())
 }
 
 pub fn audio_bytes(value: &UnityValue, am: &AssetManager, file_name: &str) -> Vec<u8> {
-    if let Some(res) = value.get("m_Resource")
-        && let (Some(source), Some(offset), Some(size)) = (res.get("m_Source").and_then(UnityValue::as_str), field_usize(res, "m_Offset"), field_usize(res, "m_Size"))
-        && size > 0
-        && let Some(data) = raw_slice(am, source, offset, size)
-    {
+    if let Some(data) = value.get("m_Resource").and_then(|res| am.streamed_resource(res)) {
         return data;
     }
     match value.get("m_AudioData") {
@@ -25,7 +15,7 @@ pub fn audio_bytes(value: &UnityValue, am: &AssetManager, file_name: &str) -> Ve
         Some(streamed @ UnityValue::Map(_)) => {
             let source = format!("{}.resS", file_name.rsplit(['/', '\\']).next().unwrap_or(file_name));
             match (field_usize(streamed, "m_Offset"), field_usize(streamed, "m_Size")) {
-                (Some(offset), Some(size)) => raw_slice(am, &source, offset, size).unwrap_or_default(),
+                (Some(offset), Some(size)) => am.resource_slice(&source, offset, size).unwrap_or_default(),
                 _ => Vec::new(),
             }
         }

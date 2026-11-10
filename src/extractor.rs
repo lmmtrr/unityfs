@@ -456,7 +456,7 @@ fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Resul
     for (asset_name, sf) in &asset_manager.files {
         for obj in &sf.objects {
             let class_id = obj.class_id;
-            if class_id != 28 && class_id != 49 && class_id != 114 && class_id != 329 {
+            if class_id != 28 && class_id != 49 && class_id != 114 && class_id != 329 && class_id != 152 {
                 continue;
             }
             let value = match asset_manager.read_object_value(asset_name, 0, obj.path_id) {
@@ -722,38 +722,19 @@ fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Resul
                         extracted_files.push(dest);
                     }
                 }
-            } else if class_id == 329 {
-                if let Ok(video_clip) = crate::classes::videoclip::VideoClip::from_value(value.clone()) {
-                    if video_clip.m_ExternalResources.m_Size > 0 {
-                        let mut video_data = Vec::new();
-                        let source = &video_clip.m_ExternalResources.m_Source;
-                        if !source.is_empty() {
-                            let stream_name = source.rsplit('/').next().unwrap_or(source);
-                            if let Some(raw_data) = asset_manager.raw_files.get(stream_name) {
-                                let start = video_clip.m_ExternalResources.m_Offset as usize;
-                                let end = start + video_clip.m_ExternalResources.m_Size as usize;
-                                if end <= raw_data.len() {
-                                    video_data = raw_data[start..end].to_vec();
-                                }
-                            }
-                        }
-                        if !video_data.is_empty() {
-                            let ext = video_clip.m_OriginalPath.as_ref()
-                                .and_then(|p| std::path::Path::new(p).extension())
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("mp4");
-                            let dot_ext = format!(".{}", ext);
-                            let final_name = if sanitized_base.ends_with(&dot_ext) {
-                                sanitized_base.clone()
-                            } else {
-                                format!("{}{}", sanitized_base, dot_ext)
-                            };
-                            let dest = out_dir.join(&final_name);
-                            if let Ok(mut f) = File::create(&dest) {
-                                if f.write_all(&video_data).is_ok() {
-                                    extracted_files.push(dest);
-                                }
-                            }
+            } else if class_id == 329 || class_id == 152 {
+                let video_data = crate::classes::videoclip::video_bytes(&value, &asset_manager);
+                if !video_data.is_empty() {
+                    let dot_ext = format!(".{}", crate::classes::videoclip::extension(&video_data, &value));
+                    let final_name = if sanitized_base.ends_with(&dot_ext) {
+                        sanitized_base.clone()
+                    } else {
+                        format!("{}{}", sanitized_base, dot_ext)
+                    };
+                    let dest = out_dir.join(&final_name);
+                    if let Ok(mut f) = File::create(&dest) {
+                        if f.write_all(&video_data).is_ok() {
+                            extracted_files.push(dest);
                         }
                     }
                 }

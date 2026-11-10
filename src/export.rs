@@ -39,7 +39,7 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
         for obj in &sf.objects {
             let class_id = obj.class_id;
             let supported = match class_id {
-                28 | 49 | 43 | 83 | 48 | 128 | 329 | 114 => true,
+                28 | 49 | 43 | 83 | 48 | 128 | 152 | 329 | 114 => true,
                 1 | 4 | 21 | 74 | 115 => options.metadata,
                 _ => false,
             };
@@ -62,7 +62,8 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
                 83 => extract_audioclip(&unity_value, &bundle_output_dir, &asset_manager, asset_name, flat, pb),
                 128 => extract_font(&unity_value, &bundle_output_dir, flat, pb),
                 48 => extract_shader(&unity_value, &bundle_output_dir, flat, pb),
-                329 => extract_videoclip(&unity_value, &bundle_output_dir, &asset_manager, flat, pb),
+                329 => extract_videoclip(&unity_value, &bundle_output_dir, &asset_manager, "VideoClip", flat, pb),
+                152 => extract_videoclip(&unity_value, &bundle_output_dir, &asset_manager, "MovieTexture", flat, pb),
                 114 => {
                     let success = extract_monobehaviour(
                         &unity_value,
@@ -1178,66 +1179,36 @@ fn extract_videoclip(
     val: &UnityValue,
     output_dir: &Path,
     asset_manager: &AssetManager,
+    folder: &str,
     by_file: bool,
     pb: &Log,
 ) -> bool {
-    let video_clip = match crate::classes::videoclip::VideoClip::from_value(val.clone()) {
-        Ok(vc) => vc,
-        Err(e) => {
-            pb.println(format!("    Failed to parse VideoClip structure: {}", e));
-            return false;
-        }
-    };
-    if video_clip.m_ExternalResources.m_Size > 0 {
-        let mut video_data = Vec::new();
-        let source = &video_clip.m_ExternalResources.m_Source;
-        if !source.is_empty() {
-            let stream_name = source.rsplit('/').next().unwrap_or(source);
-            if let Some(raw_data) = asset_manager.raw_files.get(stream_name) {
-                let start = video_clip.m_ExternalResources.m_Offset as usize;
-                let end = start + video_clip.m_ExternalResources.m_Size as usize;
-                if end <= raw_data.len() {
-                    video_data = raw_data[start..end].to_vec();
-                }
-            }
-        }
-        if !video_data.is_empty() {
-            let ext = video_clip.m_OriginalPath.as_ref()
-                .and_then(|p| Path::new(p).extension())
-                .and_then(|s| s.to_str())
-                .unwrap_or("mp4");
-            let dot_ext = format!(".{}", ext);
-            let sanitized_base = video_clip.m_Name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
-            let filename = if sanitized_base.is_empty() {
-                format!("video.{}", ext)
-            } else if sanitized_base.ends_with(&dot_ext) {
-                sanitized_base.clone()
-            } else {
-                format!("{}{}", sanitized_base, dot_ext)
-            };
-            let video_dir = if by_file {
-                output_dir.to_path_buf()
-            } else {
-                output_dir.join("VideoClip")
-            };
-            let _ = std::fs::create_dir_all(&video_dir);
-            match get_unique_path(&video_dir, &filename, Some(&video_data)) {
-                UniquePathResult::New(dest) => {
-                    if let Err(e) = std::fs::write(&dest, &video_data) {
-                        pb.println(format!("    Failed to write VideoClip '{}': {}", dest.display(), e));
-                        false
-                    } else {
-                        true
-                    }
-                }
-                UniquePathResult::Exists(_) => true,
-            }
-        } else {
-            pb.println(format!("    Failed to extract VideoClip raw bytes: resource data is missing or empty."));
-            false
-        }
+    let video_data = crate::classes::videoclip::video_bytes(val, asset_manager);
+    if video_data.is_empty() {
+        return false;
+    }
+    let ext = crate::classes::videoclip::extension(&video_data, val);
+    let name = val.get("m_Name").and_then(UnityValue::as_str).unwrap_or("");
+    let dot_ext = format!(".{}", ext);
+    let sanitized_base = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
+    let filename = if sanitized_base.is_empty() {
+        format!("video{}", dot_ext)
+    } else if sanitized_base.ends_with(&dot_ext) {
+        sanitized_base
     } else {
-        false
+        format!("{}{}", sanitized_base, dot_ext)
+    };
+    let video_dir = if by_file { output_dir.to_path_buf() } else { output_dir.join(folder) };
+    let _ = std::fs::create_dir_all(&video_dir);
+    match get_unique_path(&video_dir, &filename, Some(&video_data)) {
+        UniquePathResult::New(dest) => match std::fs::write(&dest, &video_data) {
+            Ok(()) => true,
+            Err(e) => {
+                pb.println(format!("    Failed to write video '{}': {}", dest.display(), e));
+                false
+            }
+        },
+        UniquePathResult::Exists(_) => true,
     }
 }
 
