@@ -279,36 +279,58 @@ impl Mesh {
         Ok(result)
     }
 
-    pub fn extract_float_vector3(&self, channel: usize) -> Result<Vec<crate::math::Vector3>, String> {
-        if channel >= self.m_VertexData.m_Channels.len() {
-            return Err("Channel not found".to_string());
+    pub fn read_component(format: u8, b: &[u8]) -> Option<f32> {
+        let b2 = |b: &[u8]| -> Option<[u8; 2]> { b.get(..2)?.try_into().ok() };
+        let b4 = |b: &[u8]| -> Option<[u8; 4]> { b.get(..4)?.try_into().ok() };
+        Some(match format {
+            0 => f32::from_le_bytes(b4(b)?),
+            1 => f16_to_f32(u16::from_le_bytes(b2(b)?)),
+            2 => *b.first()? as f32 / 255.0,
+            3 => (*b.first()? as i8 as f32 / 127.0).max(-1.0),
+            4 => u16::from_le_bytes(b2(b)?) as f32 / 65535.0,
+            5 => (i16::from_le_bytes(b2(b)?) as f32 / 32767.0).max(-1.0),
+            6 => *b.first()? as f32,
+            7 => *b.first()? as i8 as f32,
+            8 => u16::from_le_bytes(b2(b)?) as f32,
+            9 => i16::from_le_bytes(b2(b)?) as f32,
+            10 => u32::from_le_bytes(b4(b)?) as f32,
+            11 => i32::from_le_bytes(b4(b)?) as f32,
+            _ => return None,
+        })
+    }
+
+    pub fn read_channel(&self, channel: usize) -> Result<(usize, Vec<f32>), String> {
+        let ch = self.m_VertexData.m_Channels.get(channel).ok_or_else(|| format!("Channel {} not found", channel))?;
+        let dim = (ch.dimension & 0xF) as usize;
+        if dim == 0 {
+            return Ok((0, Vec::new()));
         }
-        let ch = &self.m_VertexData.m_Channels[channel];
-        if (ch.dimension & 0xF) < 3 {
-            return Err("Channel dimension < 3".to_string());
+        if ch.format > 11 {
+            return Err(format!("Unsupported vertex format {} in channel {}", ch.format, channel));
         }
-        if ch.format != 0 {
-            return Err("Channel format is not float".to_string());
-        }
-        let data = self.m_VertexData.m_DataSize.as_ref()
-            .or(self.m_VertexData._typelessdata.as_ref())
-            .ok_or("No vertex data")?;
-        let data_bytes = &data.0;
+        let data = &self.m_VertexData.m_DataSize.as_ref().or(self.m_VertexData._typelessdata.as_ref()).ok_or("No vertex data")?.0;
+        let size = Self::get_format_size(ch.format);
         let stride = self.get_stream_stride(ch.stream);
         let stream_offset = self.get_stream_offset(ch.stream);
         let count = self.m_VertexData.m_VertexCount as usize;
-        let mut result = Vec::with_capacity(count);
+        let mut out = Vec::with_capacity(count * dim);
         for i in 0..count {
-            let offset = stream_offset + i * stride + (ch.offset as usize);
-            if offset + 12 > data_bytes.len() {
-                return Err("Out of bounds".to_string());
+            let base = stream_offset + i * stride + ch.offset as usize;
+            for c in 0..dim {
+                let at = base + c * size;
+                let bytes = data.get(at..at + size).ok_or("Out of bounds")?;
+                out.push(Self::read_component(ch.format, bytes).ok_or("Out of bounds")?);
             }
-            let x = f32::from_le_bytes(data_bytes[offset..offset+4].try_into().unwrap());
-            let y = f32::from_le_bytes(data_bytes[offset+4..offset+8].try_into().unwrap());
-            let z = f32::from_le_bytes(data_bytes[offset+8..offset+12].try_into().unwrap());
-            result.push(crate::math::Vector3 { x, y, z });
         }
-        Ok(result)
+        Ok((dim, out))
+    }
+
+    pub fn extract_float_vector3(&self, channel: usize) -> Result<Vec<crate::math::Vector3>, String> {
+        let (dim, values) = self.read_channel(channel)?;
+        if dim < 3 {
+            return Err("Channel dimension < 3".to_string());
+        }
+        Ok(values.chunks_exact(dim).map(|v| crate::math::Vector3 { x: v[0], y: v[1], z: v[2] }).collect())
     }
 
     pub fn extract_uvs(&self) -> Result<Vec<(f32, f32)>, String> {
@@ -356,40 +378,11 @@ impl Mesh {
                 }
             }
         }
-        let channel = 4;
-        if channel >= self.m_VertexData.m_Channels.len() {
-            return Err("UV Channel not found".to_string());
-        }
-        let ch = &self.m_VertexData.m_Channels[channel];
-        if (ch.dimension & 0xF) < 2 {
+        let (dim, values) = self.read_channel(4)?;
+        if dim < 2 {
             return Err("UV Channel dimension < 2".to_string());
         }
-        let data = self.m_VertexData.m_DataSize.as_ref()
-            .or(self.m_VertexData._typelessdata.as_ref())
-            .ok_or("No vertex data")?;
-        let data_bytes = &data.0;
-        let stride = self.get_stream_stride(ch.stream);
-        let stream_offset = self.get_stream_offset(ch.stream);
-        let count = self.m_VertexData.m_VertexCount as usize;
-        let mut result = Vec::with_capacity(count);
-        for i in 0..count {
-            let offset = stream_offset + i * stride + (ch.offset as usize);
-            let (u, v) = if ch.format == 0 {
-                if offset + 8 > data_bytes.len() { return Err("Out of bounds".to_string()); }
-                let u = f32::from_le_bytes(data_bytes[offset..offset+4].try_into().unwrap());
-                let v = f32::from_le_bytes(data_bytes[offset+4..offset+8].try_into().unwrap());
-                (u, v)
-            } else if ch.format == 1 {
-                if offset + 4 > data_bytes.len() { return Err("Out of bounds".to_string()); }
-                let u_raw = u16::from_le_bytes(data_bytes[offset..offset+2].try_into().unwrap());
-                let v_raw = u16::from_le_bytes(data_bytes[offset+2..offset+4].try_into().unwrap());
-                (f16_to_f32(u_raw), f16_to_f32(v_raw))
-            } else {
-                return Err(format!("Unsupported UV format {}", ch.format));
-            };
-            result.push((u, v));
-        }
-        Ok(result)
+        Ok(values.chunks_exact(dim).map(|v| (v[0], v[1])).collect())
     }
 
     pub fn extract_bone_weights(&self) -> Result<Vec<crate::math::Vector4>, String> {
@@ -442,36 +435,18 @@ impl Mesh {
                 }
             }
         }
-        let channel = 12;
-        if channel >= self.m_VertexData.m_Channels.len() {
-            return Err("BoneWeight Channel not found".to_string());
-        }
-        let ch = &self.m_VertexData.m_Channels[channel];
+        let (dim, values) = self.read_channel(12)?;
         let count = self.m_VertexData.m_VertexCount as usize;
-        if (ch.dimension & 0xF) == 0 {
+        if dim == 0 {
             return Ok(vec![crate::math::Vector4 { x: 1.0, y: 0.0, z: 0.0, w: 0.0 }; count]);
         }
-        if ch.format != 0 {
-            return Err(format!("Unsupported BoneWeight format: dim={}, format={}", ch.dimension, ch.format));
-        }
-        let data = self.m_VertexData.m_DataSize.as_ref()
-            .or(self.m_VertexData._typelessdata.as_ref())
-            .ok_or("No vertex data")?;
-        let data_bytes = &data.0;
-        let stride = self.get_stream_stride(ch.stream);
-        let stream_offset = self.get_stream_offset(ch.stream);
-        let mut result = Vec::with_capacity(count);
-        for i in 0..count {
-            let offset = stream_offset + i * stride + (ch.offset as usize);
-            let dim = (ch.dimension & 0xF) as usize;
-            if offset + (dim * 4) > data_bytes.len() { return Err("Out of bounds".to_string()); }
-            let x = if dim >= 1 { f32::from_le_bytes(data_bytes[offset..offset+4].try_into().unwrap()) } else { 1.0 };
-            let y = if dim >= 2 { f32::from_le_bytes(data_bytes[offset+4..offset+8].try_into().unwrap()) } else { 0.0 };
-            let z = if dim >= 3 { f32::from_le_bytes(data_bytes[offset+8..offset+12].try_into().unwrap()) } else { 0.0 };
-            let w = if dim >= 4 { f32::from_le_bytes(data_bytes[offset+12..offset+16].try_into().unwrap()) } else { 0.0 };
-            result.push(crate::math::Vector4 { x, y, z, w });
-        }
-        Ok(result)
+        Ok(values
+            .chunks_exact(dim)
+            .map(|v| {
+                let at = |k: usize| v.get(k).copied().unwrap_or(0.0);
+                crate::math::Vector4 { x: at(0), y: at(1), z: at(2), w: at(3) }
+            })
+            .collect())
     }
 
     pub fn extract_bone_indices(&self) -> Result<Vec<[u32; 4]>, String> {
@@ -518,51 +493,15 @@ impl Mesh {
                 }
             }
         }
-        let channel = 13;
-        if channel >= self.m_VertexData.m_Channels.len() {
-            return Err("BlendIndices Channel not found".to_string());
-        }
-        let ch = &self.m_VertexData.m_Channels[channel];
+        let (dim, values) = self.read_channel(13)?;
         let count = self.m_VertexData.m_VertexCount as usize;
-        if (ch.dimension & 0xF) == 0 {
+        if dim == 0 {
             return Ok(vec![[0, 0, 0, 0]; count]);
         }
-        let data = self.m_VertexData.m_DataSize.as_ref()
-            .or(self.m_VertexData._typelessdata.as_ref())
-            .ok_or("No vertex data")?;
-        let data_bytes = &data.0;
-        let stride = self.get_stream_stride(ch.stream);
-        let stream_offset = self.get_stream_offset(ch.stream);
-        let mut result = Vec::with_capacity(count);
-        let dim = (ch.dimension & 0xF) as usize;
-        for i in 0..count {
-            let offset = stream_offset + i * stride + (ch.offset as usize);
-            if ch.format == 10 || ch.format == 11 {
-                if offset + dim * 4 > data_bytes.len() { return Err("Out of bounds".to_string()); }
-                let i0 = if dim >= 1 { u32::from_le_bytes(data_bytes[offset..offset+4].try_into().unwrap()) } else { 0 };
-                let i1 = if dim >= 2 { u32::from_le_bytes(data_bytes[offset+4..offset+8].try_into().unwrap()) } else { 0 };
-                let i2 = if dim >= 3 { u32::from_le_bytes(data_bytes[offset+8..offset+12].try_into().unwrap()) } else { 0 };
-                let i3 = if dim >= 4 { u32::from_le_bytes(data_bytes[offset+12..offset+16].try_into().unwrap()) } else { 0 };
-                result.push([i0, i1, i2, i3]);
-            } else if ch.format == 2 || ch.format == 3 || ch.format == 6 || ch.format == 7 {
-                if offset + dim > data_bytes.len() { return Err("Out of bounds".to_string()); }
-                let i0 = if dim >= 1 { data_bytes[offset] as u32 } else { 0 };
-                let i1 = if dim >= 2 { data_bytes[offset+1] as u32 } else { 0 };
-                let i2 = if dim >= 3 { data_bytes[offset+2] as u32 } else { 0 };
-                let i3 = if dim >= 4 { data_bytes[offset+3] as u32 } else { 0 };
-                result.push([i0, i1, i2, i3]);
-            } else if ch.format == 4 || ch.format == 5 || ch.format == 8 || ch.format == 9 {
-                if offset + dim * 2 > data_bytes.len() { return Err("Out of bounds".to_string()); }
-                let i0 = if dim >= 1 { u16::from_le_bytes(data_bytes[offset..offset+2].try_into().unwrap()) as u32 } else { 0 };
-                let i1 = if dim >= 2 { u16::from_le_bytes(data_bytes[offset+2..offset+4].try_into().unwrap()) as u32 } else { 0 };
-                let i2 = if dim >= 3 { u16::from_le_bytes(data_bytes[offset+4..offset+6].try_into().unwrap()) as u32 } else { 0 };
-                let i3 = if dim >= 4 { u16::from_le_bytes(data_bytes[offset+6..offset+8].try_into().unwrap()) as u32 } else { 0 };
-                result.push([i0, i1, i2, i3]);
-            } else {
-                return Err(format!("Unsupported BlendIndices format {}", ch.format));
-            }
-        }
-        Ok(result)
+        Ok(values
+            .chunks_exact(dim)
+            .map(|v| std::array::from_fn(|k| v.get(k).map_or(0, |x| *x as u32)))
+            .collect())
     }
 }
 
