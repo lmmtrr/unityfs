@@ -11,6 +11,16 @@ pub fn is_unity_bundle(data: &[u8]) -> bool {
 }
 
 pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: &[u8], version: &crate::unity_version::UnityVersion, flip_y: bool) -> Option<Vec<u8>> {
+    let mut bytes = decode_texture_pixels(width, height, format, image_data, version, flip_y)?;
+    if !bytes.chunks_exact(4).any(|p| p[3] > 50) {
+        for chunk in bytes.chunks_exact_mut(4) {
+            chunk[3] = 255;
+        }
+    }
+    Some(bytes)
+}
+
+pub(crate) fn decode_texture_pixels(width: usize, height: usize, format: i32, image_data: &[u8], version: &crate::unity_version::UnityVersion, flip_y: bool) -> Option<Vec<u8>> {
     let (block_w, block_h) = match format {
         10 | 11 | 12 | 24 | 25 | 26 | 27 | 34 | 35 | 36 | 41 | 42 | 43 | 44 | 45 | 46 | 47 => (4, 4),
         30 | 31 => (8, 4),
@@ -327,7 +337,6 @@ pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: 
     }
     if success {
         let mut bytes = Vec::with_capacity(width * height * 4);
-        let mut has_strong_alpha = false;
         for row in 0..height {
             let y = if flip_y { height - 1 - row } else { row };
             for x in 0..width {
@@ -338,14 +347,6 @@ pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: 
                 bytes.push(b[1]);
                 bytes.push(b[0]);
                 bytes.push(b[3]);
-                if b[3] > 50 {
-                    has_strong_alpha = true;
-                }
-            }
-        }
-        if !has_strong_alpha {
-            for chunk in bytes.chunks_exact_mut(4) {
-                chunk[3] = 255;
             }
         }
         Some(bytes)

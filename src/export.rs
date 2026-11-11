@@ -36,11 +36,14 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
     let pose_parts = std::sync::Mutex::new(Vec::new());
     let moc_stem = std::sync::Mutex::new(None);
     let mut count = 0;
+    let mut sprites = crate::classes::sprite::SpriteAtlases::open(&asset_manager);
     for (asset_name, sf) in &asset_manager.files {
-        for obj in &sf.objects {
+        let mut objects: Vec<_> = sf.objects.iter().collect();
+        objects.sort_by_key(|o| o.class_id == 213);
+        for obj in objects {
             let class_id = obj.class_id;
             let supported = match class_id {
-                28 | 49 | 43 | 83 | 48 | 128 | 152 | 329 | 114 => true,
+                28 | 49 | 43 | 83 | 48 | 128 | 152 | 329 | 114 | 213 => true,
                 1 | 4 | 21 | 74 | 115 => options.metadata,
                 _ => false,
             };
@@ -59,6 +62,7 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
             let success = match class_id {
                 28 => extract_texture2d(&unity_value, &sf.unity_version, &bundle_output_dir, &asset_manager, flat, pb),
                 49 => extract_text_asset(&unity_value, &bundle_output_dir, flat, pb),
+                213 => extract_sprite(&unity_value, asset_name, &mut sprites, &bundle_output_dir, pb),
                 43 => extract_mesh(&unity_value, &sf.unity_version, &bundle_output_dir, flat, pb),
                 83 => extract_audioclip(&unity_value, &bundle_output_dir, &asset_manager, asset_name, flat, pb),
                 128 => extract_font(&unity_value, &bundle_output_dir, flat, pb),
@@ -395,6 +399,26 @@ fn extract_texture2d(
         pb.println(format!("    Failed to decompress texture '{}' (format={})", name, format));
         false
     }
+}
+
+fn extract_sprite(val: &UnityValue, asset_name: &str, sprites: &mut crate::classes::sprite::SpriteAtlases, output_dir: &Path, pb: &Log) -> bool {
+    let name = match val.get("m_Name") {
+        Some(UnityValue::String(s)) if !s.is_empty() => s.clone(),
+        _ => "sprite".to_string(),
+    };
+    let Some(image) = sprites.image(asset_name, val) else {
+        pb.println(format!("    Failed to cut sprite '{}'", name));
+        return false;
+    };
+    let mut png = Vec::new();
+    let encoded = image::ImageEncoder::write_image(image::codecs::png::PngEncoder::new(&mut png), &image.rgba, image.width as u32, image.height as u32, image::ExtendedColorType::Rgba8);
+    if let Err(e) = encoded {
+        pb.println(format!("    Failed to encode sprite '{}': {}", name, e));
+        return false;
+    }
+    let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
+    let filename = if safe_name.is_empty() { "sprite.png".to_string() } else { format!("{}.png", safe_name) };
+    write_unique(output_dir, &filename, &png, "sprite", pb)
 }
 
 fn extract_mesh(val: &UnityValue, version: &crate::unity_version::UnityVersion, output_dir: &Path, by_file: bool, pb: &Log) -> bool {

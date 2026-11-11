@@ -135,6 +135,25 @@ impl Mesh {
         Ok(mesh)
     }
 
+    pub fn from_render_data(render_data: &crate::value::UnityValue, version: &UnityVersion) -> Result<Self, String> {
+        use crate::classes::TryFromUnityValue;
+        let field = |key: &str| render_data.get(key).ok_or_else(|| format!("Missing field: {}", key));
+        let mut mesh = Mesh {
+            m_Name: String::new(),
+            m_VertexData: VertexData::try_from_unity_value(field("m_VertexData")?)?,
+            m_IndexFormat: None,
+            m_IndexBuffer: PackedData::try_from_unity_value(field("m_IndexBuffer")?)?.0,
+            m_BindPose: None,
+            m_BoneNameHashes: None,
+            m_SubMeshes: Vec::new(),
+            m_StreamData: None,
+            m_MeshCompression: None,
+            m_CompressedMesh: None,
+        };
+        mesh.normalize_channels(version.major());
+        Ok(mesh)
+    }
+
     fn normalize_channels(&mut self, major: u16) {
         if major == 0 || major >= 2019 {
             return;
