@@ -247,7 +247,7 @@ impl Mesh {
         self.m_VertexData.m_Streams.as_ref()?.get(stream as usize)
     }
 
-    fn uses_32bit_indices(&self) -> bool {
+    pub fn uses_32bit_indices(&self) -> bool {
         self.m_Use16BitIndices == Some(0) || self.m_IndexFormat == Some(1)
     }
 
@@ -291,7 +291,7 @@ impl Mesh {
         let count = self.m_VertexData.m_VertexCount as usize;
         if count == 0 {
             if let Some(ref compressed) = self.m_CompressedMesh {
-                if let Some(ref vertices) = compressed.m_Vertices {
+                if let Some(vertices) = compressed.m_Vertices.as_ref().filter(|vertices| vertices.m_NumItems > 0) {
                     return (vertices.m_NumItems / 3) as usize;
                 }
             }

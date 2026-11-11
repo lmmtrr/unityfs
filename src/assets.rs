@@ -75,7 +75,7 @@ impl AssetManager {
     pub fn add_resource_siblings(&mut self, dir: &Path, name: &str) {
         let name = name.to_lowercase();
         let stem = name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s);
-        let candidates = [format!("{}.ress", name), format!("{}.resource", name), format!("{}.resource", stem)];
+        let candidates = [format!("{}.ress", name), format!("{}.resource", name), format!("{}.resource", stem), format!("{}.ress", stem), format!("{}.assets.ress", stem)];
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         for entry in entries.flatten() {
             let file_name = entry.file_name().to_string_lossy().into_owned();
@@ -88,10 +88,17 @@ impl AssetManager {
         }
     }
 
+    fn raw_resource(&self, source: &str) -> Option<&ByteSource> {
+        let base = source.rsplit(['/', '\\']).next().unwrap_or(source);
+        let stem = base.rsplit_once('.').map_or(base, |(stem, _)| stem);
+        [base.to_string(), format!("{}.resource", stem), format!("{}.assets.resS", stem), format!("{}.resS", stem)].iter().find_map(|name| {
+            let simple = simplify_name(name);
+            self.raw_files.get(name).or_else(|| self.raw_files.iter().find(|(key, _)| simplify_name(key) == simple).map(|(_, data)| data))
+        })
+    }
+
     pub fn resource_slice(&self, source: &str, offset: usize, size: usize) -> Option<Vec<u8>> {
-        let name = source.rsplit(['/', '\\']).next().unwrap_or(source);
-        let raw = self.raw_files.get(name).or_else(|| self.raw_files.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v))?;
-        raw.get(offset..offset.checked_add(size)?).map(<[u8]>::to_vec)
+        self.raw_resource(source)?.get(offset..offset.checked_add(size)?).map(<[u8]>::to_vec)
     }
 
     pub fn streamed_resource(&self, res: &crate::value::UnityValue) -> Option<Vec<u8>> {
