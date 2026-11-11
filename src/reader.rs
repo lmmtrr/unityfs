@@ -184,7 +184,7 @@ impl Reader {
     }
 
     pub fn read_string_null(&mut self) -> String {
-        let start = self.pos;
+        let start = self.pos.min(self.data.len());
         let mut end = start;
         while end < self.data.len() && self.data[end] != 0 {
             end += 1;

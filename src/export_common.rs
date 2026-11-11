@@ -397,6 +397,7 @@ pub(crate) fn criware_blobs(value: &UnityValue, key: &str, out: &mut Vec<(String
 }
 
 pub(crate) fn criware_filename(base: &str, key: &str, ext: &str) -> String {
+    let key = key.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
     if key.is_empty() { format!("{}.{}", base, ext) } else { format!("{}_{}.{}", base, key, ext) }
 }
 
@@ -508,6 +509,15 @@ pub(crate) fn finalize_content(filename: &str, data: Vec<u8>) -> Vec<u8> {
     let Ok(mut json) = serde_json::from_slice::<serde_json::Value>(&data) else { return data };
     flatten_json_paths(&mut json);
     serde_json::to_vec_pretty(&json).unwrap_or(data)
+}
+
+pub(crate) fn numbered_name(filename: &str, counter: usize) -> String {
+    let path = Path::new(filename);
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    match path.extension() {
+        Some(extension) => format!("{} ({}).{}", stem, counter, extension.to_string_lossy()),
+        None => format!("{} ({})", stem, counter),
+    }
 }
 
 pub(crate) fn moc_stem(base: &str) -> String {

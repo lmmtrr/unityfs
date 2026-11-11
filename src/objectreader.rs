@@ -41,7 +41,7 @@ impl ObjectReader {
             _ => return Err(format!("No TypeTree nodes found for class_id {}", self.class_id)),
         };
         let mut obj_reader = reader.absolute_reader(self.byte_start, self.byte_size);
-        let mut tt_reader = TypeTreeReader::new(&mut obj_reader, self.byte_start + self.byte_size, ref_types, self.class_id);
+        let mut tt_reader = TypeTreeReader::new(&mut obj_reader, self.byte_start.saturating_add(self.byte_size), ref_types, self.class_id);
         tt_reader.skip = skip;
         Ok(tt_reader.read(nodes))
     }

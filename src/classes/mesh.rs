@@ -20,7 +20,7 @@ define_unity_class!(SubMesh {
     firstByte: u32,
     indexCount: u32,
     topology: u32,
-    baseVertex: u32,
+    baseVertex: Option<u32>,
     firstVertex: u32,
     vertexCount: u32,
 });
@@ -132,6 +132,15 @@ impl Mesh {
     pub fn read(value: &crate::value::UnityValue, version: &UnityVersion) -> Result<Self, String> {
         let mut mesh = <Self as crate::classes::TryFromUnityValue>::try_from_unity_value(value)?;
         mesh.normalize_channels(version.major());
+        Ok(mesh)
+    }
+
+    pub fn read_with_resources(value: &crate::value::UnityValue, version: &UnityVersion, asset_manager: &crate::assets::AssetManager) -> Result<Self, String> {
+        let mut mesh = Self::read(value, version)?;
+        if let Some(stream) = mesh.m_StreamData.as_ref().filter(|s| s.size > 0 && !s.path.is_empty()) {
+            let data = asset_manager.resource_slice(&stream.path, stream.offset as usize, stream.size as usize).ok_or_else(|| format!("Stream '{}' not found", stream.path))?;
+            mesh.m_VertexData.m_DataSize = Some(crate::classes::TypelessData(data));
+        }
         Ok(mesh)
     }
 
@@ -328,6 +337,17 @@ impl Mesh {
             }
         }
         Ok(result)
+    }
+
+    pub fn triangles(&self) -> Result<Vec<Vec<[u32; 3]>>, String> {
+        let indices = self.get_indices()?;
+        let index_size = if self.m_IndexFormat.unwrap_or(0) == 1 { 4 } else { 2 };
+        Ok(self.m_SubMeshes.iter().map(|sub| {
+            let first = (sub.firstByte / index_size) as usize;
+            let end = first.saturating_add(sub.indexCount as usize).min(indices.len());
+            let base = sub.baseVertex.unwrap_or(0);
+            topology_triangles(indices.get(first..end).unwrap_or(&[]), sub.topology).into_iter().map(|t| t.map(|i| i.wrapping_add(base))).collect()
+        }).collect())
     }
 
     pub fn read_component(format: u8, b: &[u8]) -> Option<f32> {
@@ -574,6 +594,20 @@ impl Mesh {
             .chunks_exact(dim)
             .map(|v| std::array::from_fn(|k| v.get(k).copied().unwrap_or(0)))
             .collect())
+    }
+}
+
+pub(crate) fn topology_triangles(range: &[u32], topology: u32) -> Vec<[u32; 3]> {
+    match topology {
+        0 => range.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect(),
+        1 => range
+            .windows(3)
+            .enumerate()
+            .filter(|(_, t)| t[0] != t[1] && t[0] != t[2] && t[1] != t[2])
+            .map(|(i, t)| if i & 1 == 1 { [t[1], t[0], t[2]] } else { [t[0], t[1], t[2]] })
+            .collect(),
+        2 => range.chunks_exact(4).flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).collect(),
+        _ => Vec::new(),
     }
 }
 

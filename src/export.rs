@@ -63,7 +63,7 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
                 28 => extract_texture2d(&unity_value, &sf.unity_version, &bundle_output_dir, &asset_manager, flat, pb),
                 49 => extract_text_asset(&unity_value, &bundle_output_dir, flat, pb),
                 213 => extract_sprite(&unity_value, asset_name, &mut sprites, &bundle_output_dir, pb),
-                43 => extract_mesh(&unity_value, &sf.unity_version, &bundle_output_dir, flat, pb),
+                43 => extract_mesh(&unity_value, &sf.unity_version, &bundle_output_dir, &asset_manager, flat, pb),
                 83 => extract_audioclip(&unity_value, &bundle_output_dir, &asset_manager, asset_name, flat, pb),
                 128 => extract_font(&unity_value, &bundle_output_dir, flat, pb),
                 48 => extract_shader(&unity_value, &bundle_output_dir, flat, pb),
@@ -98,7 +98,7 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
         let stem = moc_stem.into_inner().unwrap().unwrap_or_else(|| file_stem.to_string());
         if let Some(serialized) = common::pose_json(pose_parts_vec) {
             let _ = std::fs::create_dir_all(&bundle_output_dir);
-            if let UniquePathResult::New(dest) = get_unique_path(&bundle_output_dir, &format!("{}.pose3.json", stem), Some(&serialized)) {
+            if let UniquePathResult::New(dest) = get_unique_path(&bundle_output_dir, &format!("{}.pose3.json", stem), &serialized) {
                 if let Err(e) = std::fs::write(&dest, &serialized) {
                     pb.println(format!("    Failed to write pose asset '{}': {}", dest.display(), e));
                 }
@@ -111,48 +111,35 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
 #[derive(Debug)]
 enum UniquePathResult {
     New(PathBuf),
-    Exists(PathBuf),
+    Exists,
 }
 
-fn get_unique_path(dir: &Path, filename: &str, data: Option<&[u8]>) -> UniquePathResult {
-    let base_path = dir.join(filename);
-    if !base_path.exists() {
-        return UniquePathResult::New(base_path);
-    }
-    if let Some(bytes) = data {
-        if let Ok(metadata) = std::fs::metadata(&base_path) {
-            if metadata.len() == bytes.len() as u64 {
-                return UniquePathResult::Exists(base_path);
-            }
-        }
-    }
-    let stem = base_path.file_stem().unwrap_or_default().to_string_lossy();
-    let extension = base_path.extension().unwrap_or_default().to_string_lossy();
+fn same_file(path: &Path, data: &[u8]) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.len() == data.len() as u64) && std::fs::read(path).is_ok_and(|existing| existing == data)
+}
+
+fn get_unique_path(dir: &Path, filename: &str, data: &[u8]) -> UniquePathResult {
+    let mut candidate = dir.join(filename);
     let mut counter = 2;
-    loop {
-        let new_filename = if extension.is_empty() {
-            format!("{} ({})", stem, counter)
-        } else {
-            format!("{} ({}).{}", stem, counter, extension)
-        };
-        let new_path = dir.join(new_filename);
-        if !new_path.exists() {
-            return UniquePathResult::New(new_path);
+    while candidate.exists() {
+        if same_file(&candidate, data) {
+            return UniquePathResult::Exists;
         }
-        if let Some(bytes) = data {
-            if let Ok(metadata) = std::fs::metadata(&new_path) {
-                if metadata.len() == bytes.len() as u64 {
-                    return UniquePathResult::Exists(new_path);
-                }
-            }
-        }
+        candidate = dir.join(common::numbered_name(filename, counter));
         counter += 1;
     }
+    UniquePathResult::New(candidate)
+}
+
+fn encode_png(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>, image::ImageError> {
+    let mut png = Vec::new();
+    image::ImageEncoder::write_image(image::codecs::png::PngEncoder::new(&mut png), rgba, width as u32, height as u32, image::ExtendedColorType::Rgba8)?;
+    Ok(png)
 }
 
 fn write_unique(dir: &Path, filename: &str, data: &[u8], what: &str, pb: &Log) -> bool {
     let _ = std::fs::create_dir_all(dir);
-    match get_unique_path(dir, filename, Some(data)) {
+    match get_unique_path(dir, filename, data) {
         UniquePathResult::New(dest) => match std::fs::write(&dest, data) {
             Ok(()) => true,
             Err(e) => {
@@ -160,7 +147,7 @@ fn write_unique(dir: &Path, filename: &str, data: &[u8], what: &str, pb: &Log) -
                 false
             }
         },
-        UniquePathResult::Exists(_) => true,
+        UniquePathResult::Exists => true,
     }
 }
 
@@ -218,6 +205,7 @@ fn extract_text_asset(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &L
         Some(UnityValue::String(s)) if !s.is_empty() => s.clone(),
         _ => "text_asset".to_string(),
     };
+    let name = Some(crate::extractor::sanitized_base_name(&name)).filter(|n| !n.trim_matches('.').is_empty()).unwrap_or_else(|| "text_asset".to_string());
     let content = match val.get("m_Script") {
         Some(UnityValue::String(s)) => Some(s.as_bytes().to_vec()),
         Some(UnityValue::Bytes(b)) => Some(b.clone()),
@@ -300,19 +288,12 @@ fn extract_text_asset(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &L
             } else {
                 format!("{}.json", base)
             }
+        } else if name.contains('.') {
+            name
+        } else if common::is_spine_binary(&data) {
+            format!("{}.skel", name)
         } else {
-            let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-' && c != '.', "");
-            if safe_name.is_empty() {
-                "text_asset.txt".to_string()
-            } else if safe_name.contains('.') {
-                safe_name
-            } else {
-                if common::is_spine_binary(&data) {
-                    format!("{}.skel", safe_name)
-                } else {
-                    format!("{}.txt", safe_name)
-                }
-            }
+            format!("{}.txt", name)
         };
         let text_dir = if by_file {
             output_dir.to_path_buf()
@@ -320,7 +301,7 @@ fn extract_text_asset(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &L
             output_dir.join("TextAsset")
         };
         let _ = std::fs::create_dir_all(&text_dir);
-        match get_unique_path(&text_dir, &filename, Some(&data)) {
+        match get_unique_path(&text_dir, &filename, &data) {
             UniquePathResult::New(dest) => {
                 if let Err(e) = std::fs::write(&dest, &data) {
                     pb.println(format!("    Failed to write text asset '{}': {}", dest.display(), e));
@@ -329,7 +310,7 @@ fn extract_text_asset(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &L
                     true
                 }
             }
-            UniquePathResult::Exists(_) => true,
+            UniquePathResult::Exists => true,
         }
     } else {
         false
@@ -368,6 +349,13 @@ fn extract_texture2d(
         return false;
     }
     if let Some(rgba_data) = decompress_texture(width, height, format, &image_data, version, true) {
+        let png = match encode_png(&rgba_data, width, height) {
+            Ok(png) => png,
+            Err(e) => {
+                pb.println(format!("    Failed to encode PNG texture '{}': {}", name, e));
+                return false;
+            }
+        };
         let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
         let filename = if safe_name.is_empty() {
             "texture.png".to_string()
@@ -379,22 +367,7 @@ fn extract_texture2d(
         } else {
             output_dir.join("Texture2D")
         };
-        let _ = std::fs::create_dir_all(&texture_dir);
-        let dest = match get_unique_path(&texture_dir, &filename, None) {
-            UniquePathResult::New(dest) | UniquePathResult::Exists(dest) => dest,
-        };
-        if let Err(e) = image::save_buffer(
-            &dest,
-            &rgba_data,
-            width as u32,
-            height as u32,
-            image::ExtendedColorType::Rgba8,
-        ) {
-            pb.println(format!("    Failed to save PNG texture '{}': {}", dest.display(), e));
-            false
-        } else {
-            true
-        }
+        write_unique(&texture_dir, &filename, &png, "PNG texture", pb)
     } else {
         pb.println(format!("    Failed to decompress texture '{}' (format={})", name, format));
         false
@@ -410,91 +383,82 @@ fn extract_sprite(val: &UnityValue, asset_name: &str, sprites: &mut crate::class
         pb.println(format!("    Failed to cut sprite '{}'", name));
         return false;
     };
-    let mut png = Vec::new();
-    let encoded = image::ImageEncoder::write_image(image::codecs::png::PngEncoder::new(&mut png), &image.rgba, image.width as u32, image.height as u32, image::ExtendedColorType::Rgba8);
-    if let Err(e) = encoded {
-        pb.println(format!("    Failed to encode sprite '{}': {}", name, e));
-        return false;
-    }
+    let png = match encode_png(&image.rgba, image.width, image.height) {
+        Ok(png) => png,
+        Err(e) => {
+            pb.println(format!("    Failed to encode sprite '{}': {}", name, e));
+            return false;
+        }
+    };
     let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
     let filename = if safe_name.is_empty() { "sprite.png".to_string() } else { format!("{}.png", safe_name) };
     write_unique(output_dir, &filename, &png, "sprite", pb)
 }
 
-fn extract_mesh(val: &UnityValue, version: &crate::unity_version::UnityVersion, output_dir: &Path, by_file: bool, pb: &Log) -> bool {
+fn extract_mesh(val: &UnityValue, version: &crate::unity_version::UnityVersion, output_dir: &Path, asset_manager: &AssetManager, by_file: bool, pb: &Log) -> bool {
     let name = match val.get("m_Name") {
         Some(UnityValue::String(s)) if !s.is_empty() => s.clone(),
         _ => "mesh".to_string(),
     };
-    if let Ok(mesh) = Mesh::read(val, version) {
-        let vertices = mesh.get_vertices().unwrap_or_default();
-        let indices = mesh.get_indices().unwrap_or_default();
-        let uvs = mesh.extract_uvs().unwrap_or_default();
-        let normals = mesh.get_normals().unwrap_or_default();
-        if vertices.is_empty() {
+    let finite = |x: f32| if x.is_nan() { 0.0 } else { x };
+    let mesh = match Mesh::read_with_resources(val, version, asset_manager) {
+        Ok(mesh) => mesh,
+        Err(e) => {
+            pb.println(format!("    Failed to read Mesh '{}': {}", name, e));
             return false;
         }
-        let mut obj_content = String::new();
-        obj_content.push_str(&format!("# Mesh Exporter: {}\n", name));
-        obj_content.push_str(&format!("o {}\n\n", name));
-        for v in &vertices {
-            obj_content.push_str(&format!("v {} {} {}\n", v.x, v.y, v.z));
+    };
+    let vertices = mesh.get_vertices().unwrap_or_default();
+    let submeshes = mesh.triangles().unwrap_or_default();
+    let uvs = mesh.extract_uvs().unwrap_or_default();
+    let normals = mesh.get_normals().unwrap_or_default();
+    if vertices.is_empty() {
+        return false;
+    }
+    let mut obj_content = format!("g {}\n", name);
+    for v in &vertices {
+        obj_content.push_str(&format!("v {} {} {}\n", finite(-v.x), finite(v.y), finite(v.z)));
+    }
+    for uv in &uvs {
+        obj_content.push_str(&format!("vt {} {}\n", finite(uv.0), finite(uv.1)));
+    }
+    for n in &normals {
+        obj_content.push_str(&format!("vn {} {} {}\n", finite(-n.x), finite(n.y), finite(n.z)));
+    }
+    let corner = |i: u32| match (!uvs.is_empty(), !normals.is_empty()) {
+        (true, true) => format!("{0}/{0}/{0}", i + 1),
+        (true, false) => format!("{0}/{0}", i + 1),
+        (false, true) => format!("{0}//{0}", i + 1),
+        (false, false) => (i + 1).to_string(),
+    };
+    for (i, triangles) in submeshes.iter().enumerate() {
+        obj_content.push_str(&format!("g {}_{}\n", name, i));
+        for t in triangles.iter().filter(|t| t.iter().all(|&v| (v as usize) < vertices.len())) {
+            obj_content.push_str(&format!("f {} {} {}\n", corner(t[2]), corner(t[1]), corner(t[0])));
         }
-        obj_content.push_str("\n");
-        for uv in &uvs {
-            obj_content.push_str(&format!("vt {} {}\n", uv.0, uv.1));
-        }
-        obj_content.push_str("\n");
-        for n in &normals {
-            obj_content.push_str(&format!("vn {} {} {}\n", n.x, n.y, n.z));
-        }
-        obj_content.push_str("\n");
-        let has_uv = !uvs.is_empty();
-        let has_normal = !normals.is_empty();
-        for chunk in indices.chunks_exact(3) {
-            let i1 = chunk[0] + 1;
-            let i2 = chunk[1] + 1;
-            let i3 = chunk[2] + 1;
-            match (has_uv, has_normal) {
-                (true, true) => {
-                    obj_content.push_str(&format!("f {}/{}/{} {}/{}/{} {}/{}/{}\n", i1, i1, i1, i2, i2, i2, i3, i3, i3));
-                }
-                (true, false) => {
-                    obj_content.push_str(&format!("f {}/{} {}/{} {}/{}\n", i1, i1, i2, i2, i3, i3));
-                }
-                (false, true) => {
-                    obj_content.push_str(&format!("f {}//{} {}//{} {}//{}\n", i1, i1, i2, i2, i3, i3));
-                }
-                (false, false) => {
-                    obj_content.push_str(&format!("f {} {} {}\n", i1, i2, i3));
-                }
-            }
-        }
-        let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
-        let filename = if safe_name.is_empty() {
-            "mesh.obj".to_string()
-        } else {
-            format!("{}.obj", safe_name)
-        };
-        let mesh_dir = if by_file {
-            output_dir.to_path_buf()
-        } else {
-            output_dir.join("Mesh")
-        };
-        let _ = std::fs::create_dir_all(&mesh_dir);
-        match get_unique_path(&mesh_dir, &filename, Some(obj_content.as_bytes())) {
-            UniquePathResult::New(dest) => {
-                if let Err(e) = std::fs::write(&dest, obj_content) {
-                    pb.println(format!("    Failed to write Mesh OBJ '{}': {}", dest.display(), e));
-                    false
-                } else {
-                    true
-                }
-            }
-            UniquePathResult::Exists(_) => true,
-        }
+    }
+    let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
+    let filename = if safe_name.is_empty() {
+        "mesh.obj".to_string()
     } else {
-        false
+        format!("{}.obj", safe_name)
+    };
+    let mesh_dir = if by_file {
+        output_dir.to_path_buf()
+    } else {
+        output_dir.join("Mesh")
+    };
+    let _ = std::fs::create_dir_all(&mesh_dir);
+    match get_unique_path(&mesh_dir, &filename, obj_content.as_bytes()) {
+        UniquePathResult::New(dest) => {
+            if let Err(e) = std::fs::write(&dest, obj_content) {
+                pb.println(format!("    Failed to write Mesh OBJ '{}': {}", dest.display(), e));
+                false
+            } else {
+                true
+            }
+        }
+        UniquePathResult::Exists => true,
     }
 }
 
@@ -527,7 +491,7 @@ fn extract_audioclip(
         output_dir.join("AudioClip")
     };
     let _ = std::fs::create_dir_all(&audio_dir);
-    match get_unique_path(&audio_dir, &filename, Some(&audio_data)) {
+    match get_unique_path(&audio_dir, &filename, &audio_data) {
         UniquePathResult::New(dest) => {
             if let Err(e) = std::fs::write(&dest, &audio_data) {
                 pb.println(format!("    Failed to write AudioClip '{}': {}", dest.display(), e));
@@ -536,7 +500,7 @@ fn extract_audioclip(
                 true
             }
         }
-        UniquePathResult::Exists(_) => true,
+        UniquePathResult::Exists => true,
     }
 }
 
@@ -550,7 +514,7 @@ fn extract_font(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log) ->
     let filename = format!("{}.{}", if safe_name.is_empty() { "font" } else { &safe_name }, crate::classes::font::extension(data));
     let font_dir = if by_file { output_dir.to_path_buf() } else { output_dir.join("Font") };
     let _ = std::fs::create_dir_all(&font_dir);
-    match get_unique_path(&font_dir, &filename, Some(data)) {
+    match get_unique_path(&font_dir, &filename, data) {
         UniquePathResult::New(dest) => match std::fs::write(&dest, data) {
             Ok(()) => true,
             Err(e) => {
@@ -558,7 +522,7 @@ fn extract_font(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log) ->
                 false
             }
         },
-        UniquePathResult::Exists(_) => true,
+        UniquePathResult::Exists => true,
     }
 }
 
@@ -587,7 +551,7 @@ fn extract_videoclip(
     };
     let video_dir = if by_file { output_dir.to_path_buf() } else { output_dir.join(folder) };
     let _ = std::fs::create_dir_all(&video_dir);
-    match get_unique_path(&video_dir, &filename, Some(&video_data)) {
+    match get_unique_path(&video_dir, &filename, &video_data) {
         UniquePathResult::New(dest) => match std::fs::write(&dest, &video_data) {
             Ok(()) => true,
             Err(e) => {
@@ -595,7 +559,7 @@ fn extract_videoclip(
                 false
             }
         },
-        UniquePathResult::Exists(_) => true,
+        UniquePathResult::Exists => true,
     }
 }
 
@@ -622,7 +586,7 @@ fn extract_shader(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log) 
             output_dir.join("Shader")
         };
         let _ = std::fs::create_dir_all(&shader_dir);
-        match get_unique_path(&shader_dir, &filename, Some(&data)) {
+        match get_unique_path(&shader_dir, &filename, &data) {
             UniquePathResult::New(dest) => {
                 if let Err(e) = std::fs::write(&dest, &data) {
                     pb.println(format!("    Failed to write Shader '{}': {}", dest.display(), e));
@@ -631,7 +595,7 @@ fn extract_shader(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log) 
                     true
                 }
             }
-            UniquePathResult::Exists(_) => true,
+            UniquePathResult::Exists => true,
         }
     } else {
         false
@@ -672,9 +636,9 @@ fn dump_asset_as_json(
     };
     let _ = std::fs::create_dir_all(&target_dir);
     if let Ok(json_str) = serde_json::to_string_pretty(&json_val) {
-        match get_unique_path(&target_dir, &filename, Some(json_str.as_bytes())) {
+        match get_unique_path(&target_dir, &filename, json_str.as_bytes()) {
             UniquePathResult::New(dest) => std::fs::write(&dest, json_str).is_ok(),
-            UniquePathResult::Exists(_) => true,
+            UniquePathResult::Exists => true,
         }
     } else {
         false

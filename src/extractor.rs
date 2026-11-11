@@ -1,5 +1,5 @@
-use std::fs::{self, File};
-use std::io::Write;
+use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use crate::assets::AssetManager;
 use crate::value::UnityValue;
@@ -11,16 +11,6 @@ pub fn is_unity_bundle(data: &[u8]) -> bool {
 }
 
 pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: &[u8], version: &crate::unity_version::UnityVersion, flip_y: bool) -> Option<Vec<u8>> {
-    let mut bytes = decode_texture_pixels(width, height, format, image_data, version, flip_y)?;
-    if !bytes.chunks_exact(4).any(|p| p[3] > 50) {
-        for chunk in bytes.chunks_exact_mut(4) {
-            chunk[3] = 255;
-        }
-    }
-    Some(bytes)
-}
-
-pub(crate) fn decode_texture_pixels(width: usize, height: usize, format: i32, image_data: &[u8], version: &crate::unity_version::UnityVersion, flip_y: bool) -> Option<Vec<u8>> {
     let (block_w, block_h) = match format {
         10 | 11 | 12 | 24 | 25 | 26 | 27 | 34 | 35 | 36 | 41 | 42 | 43 | 44 | 45 | 46 | 47 => (4, 4),
         30 | 31 => (8, 4),
@@ -133,6 +123,12 @@ pub(crate) fn decode_texture_pixels(width: usize, height: usize, format: i32, im
             }
             success = true;
         }
+        8 => {
+            for (i, chunk) in safe_image_data.chunks_exact(3).enumerate().take(width * height) {
+                decompressed[i] = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], 255]);
+            }
+            success = true;
+        }
         10 => {
             success = texture2ddecoder::decode_bc1(safe_image_data, aligned_w, aligned_h, &mut decompressed).is_ok();
         }
@@ -166,7 +162,7 @@ pub(crate) fn decode_texture_pixels(width: usize, height: usize, format: i32, im
         12 => {
             success = texture2ddecoder::decode_bc3(safe_image_data, aligned_w, aligned_h, &mut decompressed).is_ok();
         }
-        17 | 20 => {
+        6 | 17 | 20 => {
             let bytes_per_channel = if format == 17 { 2 } else { 4 };
             let to_u8 = |c: &[u8]| -> u8 {
                 let f = if bytes_per_channel == 2 {
@@ -181,7 +177,7 @@ pub(crate) fn decode_texture_pixels(width: usize, height: usize, format: i32, im
                 let g = to_u8(&px[bytes_per_channel..bytes_per_channel * 2]);
                 let b = to_u8(&px[bytes_per_channel * 2..bytes_per_channel * 3]);
                 let a = to_u8(&px[bytes_per_channel * 3..bytes_per_channel * 4]);
-                decompressed[i] = u32::from_le_bytes([b, g, r, a]);
+                decompressed[i] = u32::from_le_bytes(if format == 6 { [r, g, b, a] } else { [b, g, r, a] });
             }
             success = true;
         }
@@ -355,7 +351,7 @@ pub(crate) fn decode_texture_pixels(width: usize, height: usize, format: i32, im
     }
 }
 
-fn sanitized_base_name(name: &str) -> String {
+pub(crate) fn sanitized_base_name(name: &str) -> String {
     let base_name = Path::new(name).file_name().map_or_else(|| name.to_string(), |f| f.to_string_lossy().to_string());
     base_name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-' && c != '.', "")
 }
@@ -371,8 +367,33 @@ pub fn texture_file_name(name: &str) -> Option<String> {
     }
 }
 
+#[derive(Default)]
+struct ExtractedFiles {
+    claimed: HashSet<String>,
+    files: Vec<PathBuf>,
+}
+
+impl ExtractedFiles {
+    fn write(&mut self, dir: &Path, name: &str, data: &[u8]) -> bool {
+        let mut dest = dir.join(name);
+        let mut counter = 2;
+        while !self.claimed.insert(dest.to_string_lossy().to_lowercase()) {
+            if fs::read(&dest).is_ok_and(|existing| existing == data) {
+                return true;
+            }
+            dest = dir.join(common::numbered_name(name, counter));
+            counter += 1;
+        }
+        let written = fs::write(&dest, data).is_ok();
+        if written {
+            self.files.push(dest);
+        }
+        written
+    }
+}
+
 fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut extracted_files = Vec::new();
+    let mut extracted = ExtractedFiles::default();
     let mut pose_parts = Vec::new();
     let mut moc_stem = None;
     for (asset_name, sf) in &asset_manager.files {
@@ -411,10 +432,7 @@ fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Resul
                         let cri_dir = out_dir.join("CriWare");
                         let _ = std::fs::create_dir_all(&cri_dir);
                         for (key, ext, data) in blobs {
-                            let dest = cri_dir.join(common::criware_filename(&sanitized_base, &key, ext));
-                            if std::fs::write(&dest, &data).is_ok() {
-                                extracted_files.push(dest);
-                            }
+                            extracted.write(&cri_dir, &common::criware_filename(&sanitized_base, &key, ext), &data);
                         }
                     }
                     common::monobehaviour_content(&value, &asset_manager, asset_name, obj)
@@ -422,12 +440,8 @@ fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Resul
                 if let Some((data, kind)) = content {
                     let final_name = common::content_filename(&sanitized_base, &data, kind);
                     let final_data = common::finalize_content(&final_name, data);
-                    let dest = out_dir.join(&final_name);
-                    if std::fs::write(&dest, &final_data).is_ok() {
-                        extracted_files.push(dest);
-                        if final_name.ends_with(".moc3") {
-                            moc_stem = Some(common::moc_stem(&sanitized_base));
-                        }
+                    if extracted.write(out_dir, &final_name, &final_data) && final_name.ends_with(".moc3") {
+                        moc_stem = Some(common::moc_stem(&sanitized_base));
                     }
                 }
             } else if class_id == 28 {
@@ -452,9 +466,8 @@ fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Resul
                 }
                 let decompressed = decompress_texture(width, height, format, &image_data, &sf.unity_version, true);
                 if let (Some(rgba_data), Some(final_name)) = (decompressed, texture_file_name(&name)) {
-                    let dest = out_dir.join(&final_name);
-                    if save_png(&dest, &rgba_data, width as u32, height as u32).is_ok() {
-                        extracted_files.push(dest);
+                    if let Ok(png) = encode_png(&rgba_data, width as u32, height as u32) {
+                        extracted.write(out_dir, &final_name, &png);
                     }
                 }
             } else if class_id == 329 || class_id == 152 {
@@ -466,37 +479,30 @@ fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Resul
                     } else {
                         format!("{}{}", sanitized_base, dot_ext)
                     };
-                    let dest = out_dir.join(&final_name);
-                    if let Ok(mut f) = File::create(&dest) {
-                        if f.write_all(&video_data).is_ok() {
-                            extracted_files.push(dest);
-                        }
-                    }
+                    extracted.write(out_dir, &final_name, &video_data);
                 }
             }
         }
     }
     if !pose_parts.is_empty() {
-        let dest = out_dir.join(format!("{}.pose3.json", moc_stem.unwrap_or_else(|| "model".to_string())));
+        let name = format!("{}.pose3.json", moc_stem.unwrap_or_else(|| "model".to_string()));
         if let Some(serialized) = common::pose_json(pose_parts) {
-            if std::fs::write(&dest, &serialized).is_ok() {
-                extracted_files.push(dest);
-            }
+            extracted.write(out_dir, &name, &serialized);
         }
     }
-    Ok(extracted_files)
+    Ok(extracted.files)
 }
 
-fn save_png<P: AsRef<Path>>(path: P, data: &[u8], width: u32, height: u32) -> Result<(), String> {
-    let file = File::create(path).map_err(|e| e.to_string())?;
-    let w = std::io::BufWriter::new(file);
-    let mut encoder = png::Encoder::new(w, width, height);
+fn encode_png(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     encoder.set_compression(png::Compression::Fast);
     let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
     writer.write_image_data(data).map_err(|e| e.to_string())?;
-    Ok(())
+    writer.finish().map_err(|e| e.to_string())?;
+    Ok(out)
 }
 
 pub fn is_unity_file(data: &[u8]) -> bool {

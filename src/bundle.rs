@@ -111,6 +111,9 @@ impl BundleFile {
         br.endian = Endian::Big;
         let _hash = br.read_bytes(16);
         let block_count = br.read_i32().max(0) as usize;
+        if block_count > br.data.len().saturating_sub(br.pos) / 10 {
+            return Err("Truncated bundle: block table out of range".to_string());
+        }
         let mut blocks = Vec::with_capacity(block_count);
         let (mut upos, mut cpos) = (0u64, data_start as u64);
         for _ in 0..block_count {
@@ -131,6 +134,9 @@ impl BundleFile {
             return Err("Truncated bundle: block data out of range".to_string());
         }
         let node_count = br.read_i32().max(0) as usize;
+        if node_count > br.data.len().saturating_sub(br.pos) / 21 {
+            return Err("Truncated bundle: node table out of range".to_string());
+        }
         let mut nodes = Vec::with_capacity(node_count);
         for _ in 0..node_count {
             nodes.push(BundleNode {
@@ -165,7 +171,8 @@ impl BundleFile {
     }
 
     pub fn read_range(&self, offset: u64, len: u64) -> Result<Vec<u8>, String> {
-        let end = offset + len;
+        let total = self.blocks.last().map_or(0, |b| b.uncompressed_offset + b.uncompressed_size as u64);
+        let end = offset.checked_add(len).filter(|&e| e <= total).ok_or_else(|| format!("range {}+{} out of bundle data", offset, len))?;
         let mut out = Vec::with_capacity(len as usize);
         let first = self.blocks.partition_point(|b| b.uncompressed_offset + b.uncompressed_size as u64 <= offset);
         for i in first..self.blocks.len() {
@@ -177,9 +184,9 @@ impl BundleFile {
             let hi = (end - b.uncompressed_offset).min(b.uncompressed_size as u64) as usize;
             if b.flags & 0x3F == 0 {
                 let s = b.compressed_offset as usize;
-                out.extend_from_slice(&self.source[s + lo..s + hi]);
+                out.extend_from_slice(self.source.get(s + lo..s + hi).ok_or_else(|| format!("block {} out of bundle data", i))?);
             } else {
-                out.extend_from_slice(&self.block_data(i)?[lo..hi]);
+                out.extend_from_slice(self.block_data(i)?.get(lo..hi).ok_or_else(|| format!("block {} shorter than declared", i))?);
             }
         }
         if out.len() as u64 != len {
@@ -196,7 +203,7 @@ impl BundleFile {
     pub fn read_node_range(&self, index: usize, offset: u64, len: u64) -> Result<Vec<u8>, String> {
         let n = &self.nodes[index];
         let len = len.min(n.size.saturating_sub(offset));
-        self.read_range(n.offset + offset, len)
+        self.read_range(n.offset.saturating_add(offset), len)
     }
 
     pub fn clear_cache(&self) {

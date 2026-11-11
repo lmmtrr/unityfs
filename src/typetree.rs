@@ -180,8 +180,9 @@ impl<'a> TypeTreeReader<'a> {
             }
             return UnityValue::Bytes(bytes);
         }
-        if size < 0 || size > 10_000_000 {
+        if size < 0 || size as usize > self.obj_end.saturating_sub(self.reader.pos) {
             *index = end - 1;
+            self.reader.pos = self.obj_end.min(self.reader.data.len());
             return UnityValue::Null;
         }
         *index += 1;
@@ -447,8 +448,9 @@ impl<'a> TypeTreeReader<'a> {
             }
             return;
         }
-        if size < 0 || size > 10_000_000 {
+        if size < 0 || size as usize > self.obj_end.saturating_sub(self.reader.pos) {
             *index = end - 1;
+            self.reader.pos = self.obj_end.min(self.reader.data.len());
             return;
         }
         *index += 1;

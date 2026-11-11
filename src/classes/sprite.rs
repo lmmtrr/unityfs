@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use crate::assets::AssetManager;
-use crate::classes::mesh::Mesh;
+use crate::classes::mesh::{topology_triangles, Mesh};
 use crate::export_common::texture_image;
-use crate::extractor::decode_texture_pixels;
+use crate::extractor::decompress_texture;
 use crate::unity_version::UnityVersion;
 use crate::value::UnityValue;
 use crate::math::{Rect, Vector2};
@@ -257,7 +257,7 @@ fn decode_texture(asset_manager: &AssetManager, texture: &TextureRef) -> Option<
     if width == 0 || height == 0 || data.is_empty() {
         return None;
     }
-    let rgba = decode_texture_pixels(width, height, format, &data, &sf.unity_version, false)?;
+    let rgba = decompress_texture(width, height, format, &data, &sf.unity_version, false)?;
     Some(SpriteImage { width, height, rgba })
 }
 
@@ -304,18 +304,7 @@ fn submesh_triangles(submesh: &UnityValue, indices: &[u32], vertex_count: usize)
     let first = field("firstByte") / 2;
     let end = (first + field("indexCount")).min(indices.len());
     let Some(range) = indices.get(first..end) else { return Vec::new() };
-    let triangles: Vec<[u32; 3]> = match field("topology") {
-        0 => range.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect(),
-        1 => range
-            .windows(3)
-            .enumerate()
-            .filter(|(_, t)| t[0] != t[1] && t[0] != t[2] && t[1] != t[2])
-            .map(|(i, t)| if i & 1 == 1 { [t[1], t[0], t[2]] } else { [t[0], t[1], t[2]] })
-            .collect(),
-        2 => range.chunks_exact(4).flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).collect(),
-        _ => Vec::new(),
-    };
-    triangles.into_iter().filter(|t| t.iter().all(|&i| (i as usize) < vertex_count)).map(|t| t.map(|i| i as usize)).collect()
+    topology_triangles(range, field("topology") as u32).into_iter().filter(|t| t.iter().all(|&i| (i as usize) < vertex_count)).map(|t| t.map(|i| i as usize)).collect()
 }
 
 fn fill_triangle(triangle: [(i64, i64); 3], width: i64, height: i64, mut plot: impl FnMut(i64, i64)) {

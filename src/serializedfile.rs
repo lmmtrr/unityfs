@@ -144,7 +144,7 @@ impl SerializedFile {
             }
         }
         if version >= 11 {
-            let script_count = reader.read_i32();
+            let script_count = Self::read_count(reader);
             for _ in 0..script_count {
                 reader.read_i32();
                 if version < 14 {
@@ -155,8 +155,8 @@ impl SerializedFile {
                 }
             }
         }
-        let externals_count = reader.read_i32();
-        let mut externals = Vec::with_capacity(externals_count as usize);
+        let externals_count = Self::read_count(reader);
+        let mut externals = Vec::with_capacity(externals_count);
         for _ in 0..externals_count {
             let mut guid = [0u8; 16];
             let mut type_ = 0;
@@ -165,7 +165,8 @@ impl SerializedFile {
             }
             if version >= 5 {
                 let bytes = reader.read_bytes(16);
-                guid.copy_from_slice(&bytes);
+                let copied = bytes.len().min(guid.len());
+                guid[..copied].copy_from_slice(&bytes[..copied]);
                 type_ = reader.read_i32();
             }
             let path_name = reader.read_string_null();
@@ -177,8 +178,8 @@ impl SerializedFile {
         }
         let mut ref_types = Vec::new();
         if version >= 20 {
-            let ref_type_count = reader.read_i32();
-            ref_types = Vec::with_capacity(ref_type_count as usize);
+            let ref_type_count = Self::read_count(reader);
+            ref_types = Vec::with_capacity(ref_type_count);
             for _ in 0..ref_type_count {
                 let (typ, ref_info) = Self::read_type(reader, version, enable_type_tree, true);
                 if let Some((class_name, namespace, assembly_name)) = ref_info {
@@ -213,6 +214,12 @@ impl SerializedFile {
         }
     }
 
+    fn read_count(reader: &mut Reader) -> usize {
+        let count = reader.read_i32();
+        let remaining = reader.data.len().saturating_sub(reader.pos);
+        usize::try_from(count).ok().filter(|&n| n <= remaining).unwrap_or(0)
+    }
+
     fn read_type(reader: &mut Reader, version: u32, enable_type_tree: bool, is_ref_type: bool) -> (SerializedType, Option<(String, String, String)>) {
         let class_id = reader.read_i32();
         if version >= 16 {
@@ -243,7 +250,7 @@ impl SerializedFile {
                     let assembly_name = reader.read_string_null();
                     ref_type_info = Some((class_name, namespace, assembly_name));
                 } else {
-                    let count = reader.read_i32();
+                    let count = Self::read_count(reader);
                     for _ in 0..count { reader.read_i32(); }
                 }
             }
@@ -348,7 +355,7 @@ impl SerializedFile {
                 None => format!("CommonString_{}", id),
             }
         } else {
-            let start = offset as usize;
+            let start = (offset as usize).min(buffer.len());
             let mut end = start;
             while end < buffer.len() && buffer[end] != 0 {
                 end += 1;
@@ -377,7 +384,7 @@ impl SerializedFile {
             reader.read_u64() as usize
         } else {
             reader.read_u32() as usize
-        } + data_offset;
+        }.saturating_add(data_offset);
         let byte_size = reader.read_u32() as usize;
         let type_id = reader.read_i32();
         let (class_id, mut nodes) = if version < 16 {
