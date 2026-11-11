@@ -6,6 +6,8 @@ use crate::value::UnityValue;
 use crate::export_common as common;
 use crate::classes::TryFromUnityValue;
 
+const XBOX360_PLATFORM: i32 = 11;
+
 const SWITCH_PLATFORM: i32 = 38;
 
 const SWITCH_GOB_WIDTH: usize = 4;
@@ -36,7 +38,11 @@ const EAC_MODIFIERS: [[i32; 8]; 16] = [
 const EAC_TEXEL_ORDER: [usize; 16] = [15, 11, 7, 3, 14, 10, 6, 2, 13, 9, 5, 1, 12, 8, 4, 0];
 
 pub fn is_unity_bundle(data: &[u8]) -> bool {
-    data.starts_with(b"UnityFS") || data.starts_with(b"UnityWeb") || data.starts_with(b"UnityRaw")
+    [b"UnityFS\0".as_slice(), b"UnityWeb\0", b"UnityRaw\0"].iter().any(|signature| data.starts_with(signature))
+}
+
+pub fn is_unity_container(data: &[u8]) -> bool {
+    is_unity_bundle(data) || crate::container::is_web_file(data)
 }
 
 pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: &[u8], version: &crate::unity_version::UnityVersion, flip_y: bool) -> Option<Vec<u8>> {
@@ -133,7 +139,36 @@ fn decode_eac(data: &[u8], width: usize, height: usize, two_channels: bool, sign
     true
 }
 
+fn minimum_input_size(format: i32, width: usize, height: usize) -> Option<usize> {
+    let pixels = |bytes: usize| width.saturating_mul(height).saturating_mul(bytes);
+    let blocks = |block_width: usize, block_height: usize, bytes: usize| width.div_ceil(block_width).saturating_mul(height.div_ceil(block_height)).saturating_mul(bytes);
+    Some(match format {
+        28 | 29 | 64 | 65 => 1,
+        1 | 63 | 75 => pixels(1),
+        2 | 7 | 9 | 13 | 15 | 21 | 62 | 76 | 79 => pixels(2),
+        3 | 8 | 77 => pixels(3),
+        4 | 5 | 14 | 16 | 18 | 22 | 72 | 78 | 80 => pixels(4),
+        73 | 81 => pixels(6),
+        17 | 19 | 74 | 82 => pixels(8),
+        6 | 20 => pixels(16),
+        10 | 26 | 34 | 35 | 41 | 42 | 45 | 46 | 60 | 61 => blocks(4, 4, 8),
+        11 | 12 | 24 | 25 | 27 | 36 | 43 | 44 | 47 | 48 | 54 | 66 => blocks(4, 4, 16),
+        30 | 31 => width.max(16).saturating_mul(height.max(8)) / 4,
+        32 | 33 => width.max(8).saturating_mul(height.max(8)) / 2,
+        49 | 55 | 67 => blocks(5, 5, 16),
+        50 | 56 | 68 => blocks(6, 6, 16),
+        51 | 57 | 69 => blocks(8, 8, 16),
+        52 | 58 | 70 => blocks(10, 10, 16),
+        53 | 59 | 71 => blocks(12, 12, 16),
+        _ => return None,
+    })
+}
+
 fn decode_texture(width: usize, height: usize, format: i32, image_data: &[u8], version: &crate::unity_version::UnityVersion, flip_y: bool) -> Option<Vec<u8>> {
+    width.checked_mul(height)?;
+    if image_data.len() < minimum_input_size(format, width, height)? {
+        return None;
+    }
     let (block_w, block_h) = match format {
         10 | 11 | 12 | 24 | 25 | 26 | 27 | 34 | 35 | 36 | 41 | 42 | 43 | 44 | 45 | 46 | 47 => (4, 4),
         30 | 31 => (8, 4),
@@ -148,14 +183,16 @@ fn decode_texture(width: usize, height: usize, format: i32, image_data: &[u8], v
     };
     let aligned_w = ((width + block_w - 1) / block_w) * block_w;
     let aligned_h = ((height + block_h - 1) / block_h) * block_h;
-    let aligned_size = aligned_w * aligned_h;
+    let aligned_size = aligned_w.saturating_mul(aligned_h);
     let is_crunch = matches!(format, 28 | 29 | 64 | 65);
     let buffer_size = if is_crunch {
-        width * height * 2
+        width.saturating_mul(height).saturating_mul(2)
     } else {
-        std::cmp::max(width * height, aligned_size)
+        std::cmp::max(width.saturating_mul(height), aligned_size)
     };
-    let mut decompressed = vec![0u32; buffer_size];
+    let mut decompressed = Vec::new();
+    decompressed.try_reserve_exact(buffer_size).ok()?;
+    decompressed.resize(buffer_size, 0u32);
     let mut success = false;
     let expected_input_size = match format {
         10 | 34 | 45 | 46 | 60 | 61 => {
@@ -539,7 +576,15 @@ fn switch_deswizzle(data: &[u8], width: usize, height: usize, block: (usize, usi
 
 pub fn decompress_unity_texture(value: &UnityValue, image_data: &[u8], version: &crate::unity_version::UnityVersion, platform: i32, flip_y: bool) -> Option<Vec<u8>> {
     let field = |key: &str| value.get(key).and_then(|v| v.as_i32()).unwrap_or(0);
-    let (width, height, format) = (field("m_Width") as usize, field("m_Height") as usize, field("m_TextureFormat"));
+    let (width, height) = (usize::try_from(field("m_Width")).ok()?, usize::try_from(field("m_Height")).ok()?);
+    let format = field("m_TextureFormat");
+    let swapped: Vec<u8>;
+    let image_data = if platform == XBOX360_PLATFORM && matches!(format, 7 | 10 | 12 | 28 | 29) {
+        swapped = image_data.chunks(2).flat_map(|pair| pair.iter().rev().copied()).collect();
+        &swapped
+    } else {
+        image_data
+    };
     let Some(gobs_per_block) = switch_gobs_per_block(platform, value) else {
         return decompress_texture(width, height, format, image_data, version, flip_y);
     };
@@ -713,7 +758,7 @@ fn encode_png(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
 }
 
 pub fn is_unity_file(data: &[u8]) -> bool {
-    is_unity_bundle(data) || crate::metadata::looks_like_serialized_file(data) || crate::metadata::looks_like_old_serialized_file(data, data.len() as u64)
+    is_unity_container(data) || crate::metadata::looks_like_serialized_file(data) || crate::metadata::looks_like_old_serialized_file(data, data.len() as u64)
 }
 
 pub fn extract_unity_assets<P: AsRef<Path>>(bundle_bytes: &[u8], out_dir: P) -> Result<Vec<PathBuf>, String> {

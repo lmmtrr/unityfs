@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use crate::bundle::BundleFile;
+use crate::container::FileKind;
 use crate::objectreader::ObjectReader;
 use crate::reader::{ByteSource, Endian, Reader};
 use crate::serializedfile::SerializedFile;
@@ -16,6 +17,7 @@ pub struct Metadata {
 enum Source {
     Bundle(BundleFile),
     File(ByteSource),
+    Entries(Vec<ByteSource>),
 }
 
 pub struct MetadataFile {
@@ -55,14 +57,24 @@ impl Metadata {
     pub fn open(path: &Path) -> Result<Self, String> {
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
         let mmap = unsafe { memmap2::Mmap::map(&file).map_err(|e| e.to_string())? };
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if crate::container::is_web_file(&mmap) {
+            return Self::open_expanded(ByteSource::Mmap(Arc::new(mmap)), &name);
+        }
         if crate::extractor::is_unity_bundle(&mmap) {
-            let bundle = BundleFile::open(ByteSource::Mmap(Arc::new(mmap)))?;
+            let source = ByteSource::Mmap(Arc::new(mmap));
+            let bundle = BundleFile::open(source.clone())?;
             let mut files = Vec::new();
             for (i, node) in bundle.nodes.iter().enumerate() {
                 if node.is_raw_stream() || node.size < 20 {
                     continue;
                 }
-                let head = bundle.read_node_range(i, 0, 48)?;
+                let head = bundle.read_node_range(i, 0, 256)?;
+                match crate::container::kind_of(&head, node.size, &node.name) {
+                    FileKind::Bundle | FileKind::Web => return Self::open_expanded(source, &name),
+                    FileKind::Raw => continue,
+                    FileKind::Assets => {}
+                }
                 let Some(extent) = SerializedFile::metadata_extent(&head) else { continue };
                 let bytes = bundle.read_node_range(i, 0, extent)?;
                 let file = SerializedFile::read(&mut Reader::new(bytes, bundle.engine_version.clone()));
@@ -73,30 +85,42 @@ impl Metadata {
             let extent = SerializedFile::metadata_extent(&mmap).ok_or("not a SerializedFile")? as usize;
             let bytes = mmap[..extent.min(mmap.len())].to_vec();
             let file = SerializedFile::read(&mut Reader::new(bytes, UnityVersion::default()));
-            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             Ok(Self { source: Source::File(ByteSource::Mmap(Arc::new(mmap))), files: vec![MetadataFile { name, file, node: 0 }] })
         }
     }
 
+    fn open_expanded(data: ByteSource, name: &str) -> Result<Self, String> {
+        let mut sources = Vec::new();
+        let mut files = Vec::new();
+        for entry in crate::container::expand(data, name)? {
+            if entry.kind != FileKind::Assets {
+                continue;
+            }
+            let Some(extent) = SerializedFile::metadata_extent(&entry.data) else { continue };
+            let bytes = entry.data[..(extent as usize).min(entry.data.len())].to_vec();
+            let file = SerializedFile::read(&mut Reader::new(bytes, entry.version));
+            files.push(MetadataFile { name: entry.name, file, node: sources.len() });
+            sources.push(entry.data);
+        }
+        Ok(Self { source: Source::Entries(sources), files })
+    }
+
     pub fn is_bundle(&self) -> bool {
-        matches!(self.source, Source::Bundle(_))
+        !matches!(self.source, Source::File(_))
     }
 
     fn read_range(&self, entry: &MetadataFile, offset: u64, len: u64) -> Result<Vec<u8>, String> {
         match &self.source {
             Source::Bundle(bundle) => bundle.read_node_range(entry.node, offset, len),
-            Source::File(data) => {
-                let start = (offset as usize).min(data.len());
-                let end = (offset.saturating_add(len) as usize).min(data.len());
-                Ok(data[start..end].to_vec())
-            }
+            Source::File(data) => Ok(slice_range(data, offset, len)),
+            Source::Entries(sources) => Ok(slice_range(&sources[entry.node], offset, len)),
         }
     }
 
     fn unity_version(&self, entry: &MetadataFile) -> UnityVersion {
         match &self.source {
             Source::Bundle(bundle) => bundle.engine_version.clone(),
-            Source::File(_) => entry.file.unity_version.clone(),
+            Source::File(_) | Source::Entries(_) => entry.file.unity_version.clone(),
         }
     }
 
@@ -163,6 +187,12 @@ impl Metadata {
         let (objects, others): (Vec<_>, Vec<_>) = assets.into_iter().partition(|o| o.class_id == 1);
         objects.into_iter().chain(others).find_map(|o| self.object_name(entry, o))
     }
+}
+
+fn slice_range(data: &[u8], offset: u64, len: u64) -> Vec<u8> {
+    let start = (offset as usize).min(data.len());
+    let end = (offset.saturating_add(len) as usize).min(data.len());
+    data[start..end].to_vec()
 }
 
 pub fn looks_like_old_serialized_file(head: &[u8], file_len: u64) -> bool {

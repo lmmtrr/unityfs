@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use crate::bundle::BundleFile;
 use crate::serializedfile::SerializedFile;
 use crate::objectreader::ObjectReader;
 use crate::reader::{ByteSource, Endian, Reader};
@@ -34,15 +33,13 @@ impl AssetManager {
 
     pub fn from_source(data: ByteSource, name: &str) -> Result<Self, String> {
         let mut manager = Self::new();
-        if crate::extractor::is_unity_bundle(&data) {
-            let bundle = BundleFile::open(data)?;
-            for (i, node) in bundle.nodes.iter().enumerate() {
-                let bytes = bundle.read_node(i)?;
-                if node.is_raw_stream() {
-                    manager.add_raw_file(node.name.clone(), bytes);
-                } else if bytes.len() > 20 {
-                    let sf = SerializedFile::read(&mut Reader::new(bytes, bundle.engine_version.clone()));
-                    manager.add_file(node.name.clone(), sf);
+        if crate::extractor::is_unity_container(&data) {
+            for entry in crate::container::expand(data, name)? {
+                if entry.kind == crate::container::FileKind::Assets {
+                    let mut reader = Reader { data: entry.data, pos: 0, endian: Endian::Big, unity_version: entry.version };
+                    manager.add_file(entry.name, SerializedFile::read(&mut reader));
+                } else {
+                    manager.add_raw_file(entry.name, entry.data);
                 }
             }
         } else if crate::metadata::looks_like_serialized_file(&data) || crate::metadata::looks_like_old_serialized_file(&data, data.len() as u64) {

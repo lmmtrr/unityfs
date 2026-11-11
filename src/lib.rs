@@ -17,6 +17,7 @@ mod export_common;
 pub mod metadata;
 pub mod fsb5;
 pub mod unitycn;
+pub mod container;
 
 pub use unity_version::UnityVersion;
 pub use reader::Reader;
@@ -28,4 +29,4 @@ pub use classes::gameobject::GameObject;
 pub use classes::transform::Transform;
 pub use classes::texture2d::Texture2D;
 pub use assets::AssetManager;
-pub use extractor::{is_unity_bundle, is_unity_file, decompress_texture, decompress_unity_texture, texture_file_name, extract_unity_assets, extract_unity_assets_with_resources, extract_unity_assets_from_path};
+pub use extractor::{is_unity_bundle, is_unity_container, is_unity_file, decompress_texture, decompress_unity_texture, texture_file_name, extract_unity_assets, extract_unity_assets_with_resources, extract_unity_assets_from_path};

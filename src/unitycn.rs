@@ -7,6 +7,14 @@ const SIGNATURE: &[u8; 16] = b"#$unity3dchina!@";
 
 const KEY_ENV: &str = "UNITYCN_KEY";
 
+const MISSING_KEY_ERROR: &str = "Bundle is UnityCN encrypted and no key is set";
+
+const WRONG_KEY_ERROR: &str = "UnityCN key does not match this bundle";
+
+pub fn is_key_error(message: &str) -> bool {
+    message.contains(MISSING_KEY_ERROR) || message.contains(WRONG_KEY_ERROR)
+}
+
 static DECRYPT_KEY: RwLock<Option<[u8; 16]>> = RwLock::new(None);
 
 pub fn set_decrypt_key(key: &[u8]) -> Result<(), String> {
@@ -49,10 +57,10 @@ impl Decryptor {
         reader.read_u32();
         let (data, key) = read_vector(reader)?;
         let (data_sig, key_sig) = read_vector(reader)?;
-        let secret = decrypt_key().ok_or_else(|| format!("Bundle is UnityCN encrypted and no key is set ({})", KEY_ENV))?;
+        let secret = decrypt_key().ok_or_else(|| format!("{} ({})", MISSING_KEY_ERROR, KEY_ENV))?;
         let cipher = Aes128::new(&secret.into());
         if &unmask(key_sig, data_sig, &cipher) != SIGNATURE {
-            return Err("UnityCN key does not match this bundle".to_string());
+            return Err(WRONG_KEY_ERROR.to_string());
         }
         let plain = unmask(key, data, &cipher);
         let nibbles: Vec<u8> = plain.iter().flat_map(|b| [b >> 4, b & 0xF]).collect();

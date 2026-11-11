@@ -10,6 +10,12 @@ const IMA_STEPS: [i32; 89] = [
 
 const IMA_INDEX: [i32; 8] = [-1, -1, -1, -1, 2, 4, 6, 8];
 
+const FADPCM_FRAME: usize = 0x8C;
+
+const FADPCM_SAMPLES: usize = 256;
+
+const FADPCM_COEFFICIENTS: [[i32; 2]; 8] = [[0, 0], [60, 0], [122, -60], [115, -52], [98, -55], [0, 0], [0, 0], [0, 0]];
+
 const SAMPLE_RATES: [u32; 11] = [4000, 8000, 11000, 11025, 16000, 22050, 24000, 32000, 44100, 48000, 96000];
 
 static VORBIS_SETUPS: Lazy<HashMap<u32, Vec<u8>>> = Lazy::new(|| {
@@ -247,6 +253,46 @@ fn rebuild_vorbis(s: &Stream) -> Option<Vec<u8>> {
     Some(ogg.out)
 }
 
+fn decode_fadpcm_frame(frame: &[u8]) -> [i16; FADPCM_SAMPLES] {
+    let coefficients = u32::from_le_bytes([frame[0], frame[1], frame[2], frame[3]]);
+    let shifts = u32::from_le_bytes([frame[4], frame[5], frame[6], frame[7]]);
+    let mut history = [i16::from_le_bytes([frame[8], frame[9]]) as i32, i16::from_le_bytes([frame[10], frame[11]]) as i32];
+    let mut out = [0; FADPCM_SAMPLES];
+    for group in 0..8 {
+        let [coefficient1, coefficient2] = FADPCM_COEFFICIENTS[((coefficients >> (group * 4)) & 0xF) as usize & 7];
+        let shift = 22 - ((shifts >> (group * 4)) & 0xF) as i32;
+        for word in 0..4 {
+            let at = 0x0C + group as usize * 0x10 + word * 4;
+            let nibbles = u32::from_le_bytes([frame[at], frame[at + 1], frame[at + 2], frame[at + 3]]);
+            for nibble in 0..8 {
+                let raw = (((nibbles >> (nibble * 4)) & 0xF) << 28) as i32;
+                let scaled = if shift >= 0 { raw >> shift.min(31) } else { raw << (-shift).min(31) };
+                let sample = ((scaled + history[0] * coefficient1 + history[1] * coefficient2) >> 6).clamp(-32768, 32767);
+                out[group as usize * 32 + word * 8 + nibble] = sample as i16;
+                history = [sample, history[0]];
+            }
+        }
+    }
+    out
+}
+
+fn decode_fadpcm(s: &Stream) -> Vec<u8> {
+    let channels = s.channels as usize;
+    let mut out = Vec::new();
+    for block in s.data.chunks_exact(FADPCM_FRAME * channels) {
+        let decoded: Vec<[i16; FADPCM_SAMPLES]> = block.chunks_exact(FADPCM_FRAME).map(decode_fadpcm_frame).collect();
+        for sample in 0..FADPCM_SAMPLES {
+            for channel in &decoded {
+                out.extend_from_slice(&channel[sample].to_le_bytes());
+            }
+        }
+    }
+    if s.samples > 0 {
+        out.truncate(s.samples as usize * channels * 2);
+    }
+    wav(1, s.channels, s.rate, 16, &out)
+}
+
 pub fn convert(d: &[u8]) -> Option<(Vec<u8>, &'static str)> {
     let s = parse(d)?;
     let pcm_bits = |bits: u16| {
@@ -261,6 +307,7 @@ pub fn convert(d: &[u8]) -> Option<(Vec<u8>, &'static str)> {
         7 => Some((decode_ima(&s), "wav")),
         11 => Some((s.data.to_vec(), "mp3")),
         15 => rebuild_vorbis(&s).map(|o| (o, "ogg")),
+        16 => Some((decode_fadpcm(&s), "wav")),
         _ => None,
     }
 }

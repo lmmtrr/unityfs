@@ -9,9 +9,27 @@ define_unity_class!(ChannelInfo {
     dimension: u8,
 });
 
+define_unity_class!(StreamInfo {
+    channelMask: u32,
+    offset: u32,
+    stride: u32,
+});
+
+define_unity_class!(LegacyVector2 {
+    x: f32,
+    y: f32,
+});
+
+define_unity_class!(LegacyVector3 {
+    x: f32,
+    y: f32,
+    z: f32,
+});
+
 define_unity_class!(VertexData {
     m_VertexCount: u32,
-    m_Channels: Vec<ChannelInfo>,
+    m_Channels: Option<Vec<ChannelInfo>>,
+    m_Streams: Option<Vec<StreamInfo>>,
     m_DataSize: Option<crate::classes::TypelessData>,
     _typelessdata: Option<crate::classes::TypelessData>,
 });
@@ -19,11 +37,18 @@ define_unity_class!(VertexData {
 define_unity_class!(SubMesh {
     firstByte: u32,
     indexCount: u32,
-    topology: u32,
+    topology: Option<u32>,
+    isTriStrip: Option<u32>,
     baseVertex: Option<u32>,
     firstVertex: u32,
     vertexCount: u32,
 });
+
+impl SubMesh {
+    pub fn topology(&self) -> u32 {
+        self.topology.or(self.isTriStrip).unwrap_or(0)
+    }
+}
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct PackedData(pub Vec<u8>);
@@ -119,7 +144,11 @@ define_unity_class!(Mesh {
     m_Name: String,
     m_VertexData: VertexData,
     m_IndexFormat: Option<u32>,
+    m_Use16BitIndices: Option<u32>,
     m_IndexBuffer: Vec<u8>,
+    m_Vertices: Option<Vec<LegacyVector3>>,
+    m_Normals: Option<Vec<LegacyVector3>>,
+    m_UV: Option<Vec<LegacyVector2>>,
     m_BindPose: Option<Vec<Matrix4x4>>,
     m_BoneNameHashes: Option<Vec<u32>>,
     m_SubMeshes: Vec<SubMesh>,
@@ -130,7 +159,19 @@ define_unity_class!(Mesh {
 
 impl Mesh {
     pub fn read(value: &crate::value::UnityValue, version: &UnityVersion) -> Result<Self, String> {
+        use crate::value::UnityValue;
+        let patched;
+        let value = match value {
+            UnityValue::Map(map) if !map.contains_key("m_VertexData") => {
+                let mut map = map.clone();
+                map.insert("m_VertexData".to_string(), UnityValue::Map([("m_VertexCount".to_string(), UnityValue::UInt32(0))].into_iter().collect()));
+                patched = UnityValue::Map(map);
+                &patched
+            }
+            _ => value,
+        };
         let mut mesh = <Self as crate::classes::TryFromUnityValue>::try_from_unity_value(value)?;
+        mesh.apply_legacy_streams(value);
         mesh.normalize_channels(version.major());
         Ok(mesh)
     }
@@ -151,6 +192,10 @@ impl Mesh {
             m_Name: String::new(),
             m_VertexData: VertexData::try_from_unity_value(field("m_VertexData")?)?,
             m_IndexFormat: None,
+            m_Use16BitIndices: None,
+            m_Vertices: None,
+            m_Normals: None,
+            m_UV: None,
             m_IndexBuffer: PackedData::try_from_unity_value(field("m_IndexBuffer")?)?.0,
             m_BindPose: None,
             m_BoneNameHashes: None,
@@ -163,11 +208,64 @@ impl Mesh {
         Ok(mesh)
     }
 
+    fn apply_legacy_streams(&mut self, value: &crate::value::UnityValue) {
+        use crate::classes::TryFromUnityValue;
+        let Some(vertex_data) = value.get("m_VertexData") else { return };
+        let streams: Vec<StreamInfo> = (0..4)
+            .filter_map(|i| vertex_data.get(&format!("m_Streams[{}]", i)))
+            .filter_map(|stream| StreamInfo::try_from_unity_value(stream).ok())
+            .collect();
+        if streams.is_empty() {
+            return;
+        }
+        let mut channels: Vec<ChannelInfo> = (0..6).map(|_| ChannelInfo { stream: 0, offset: 0, format: 0, dimension: 0 }).collect();
+        for (index, stream) in streams.iter().enumerate() {
+            let mut offset = 0;
+            for channel in 0..6 {
+                if stream.channelMask & (1 << channel) == 0 {
+                    continue;
+                }
+                let (format, dimension) = match channel {
+                    0 | 1 => (0, 3),
+                    2 => (2, 4),
+                    3 | 4 => (0, 2),
+                    _ => (0, 4),
+                };
+                channels[channel] = ChannelInfo { stream: index as u8, offset, format, dimension };
+                offset += dimension * if format == 2 { 1 } else { 4 };
+            }
+        }
+        self.m_VertexData.m_Channels = Some(channels);
+        self.m_VertexData.m_Streams = Some(streams);
+    }
+
+    fn channels(&self) -> &[ChannelInfo] {
+        self.m_VertexData.m_Channels.as_deref().unwrap_or(&[])
+    }
+
+    fn stream_info(&self, stream: u8) -> Option<&StreamInfo> {
+        self.m_VertexData.m_Streams.as_ref()?.get(stream as usize)
+    }
+
+    fn uses_32bit_indices(&self) -> bool {
+        self.m_Use16BitIndices == Some(0) || self.m_IndexFormat == Some(1)
+    }
+
     fn normalize_channels(&mut self, major: u16) {
         if major == 0 || major >= 2019 {
             return;
         }
-        let channels = &mut self.m_VertexData.m_Channels;
+        if major < 5 {
+            let masks: Vec<Option<u32>> = self.channels().iter().map(|ch| self.stream_info(ch.stream).map(|stream| stream.channelMask)).collect();
+            if let Some(channels) = self.m_VertexData.m_Channels.as_mut() {
+                for (index, channel) in channels.iter_mut().enumerate() {
+                    if masks[index].is_some_and(|mask| mask & (1 << index) == 0) {
+                        channel.dimension = 0;
+                    }
+                }
+            }
+        }
+        let Some(channels) = self.m_VertexData.m_Channels.as_mut() else { return };
         for ch in channels.iter_mut() {
             ch.format = match (major >= 2017, ch.format) {
                 (_, f @ 0..=2) => f,
@@ -177,15 +275,16 @@ impl Mesh {
                 _ => u8::MAX,
             };
         }
-        if major < 5 || major >= 2018 || channels.len() != 8 {
+        let expected = if major < 5 { 6 } else { 8 };
+        if major >= 2018 || channels.len() != expected {
             return;
         }
         if channels[2].format == 2 && channels[2].dimension & 0xF != 0 {
             channels[2].dimension = (channels[2].dimension & 0xF0) | 4;
         }
-        let tangent = channels.remove(7);
+        let tangent = channels.remove(expected - 1);
         channels.insert(2, tangent);
-        channels.extend((0..6).map(|_| ChannelInfo { stream: 0, offset: 0, format: 0, dimension: 0 }));
+        channels.extend((expected..14).map(|_| ChannelInfo { stream: 0, offset: 0, format: 0, dimension: 0 }));
     }
 
     pub fn get_vertex_count(&self) -> usize {
@@ -196,6 +295,7 @@ impl Mesh {
                     return (vertices.m_NumItems / 3) as usize;
                 }
             }
+            return self.m_Vertices.as_ref().map_or(0, Vec::len);
         }
         count
     }
@@ -212,8 +312,11 @@ impl Mesh {
     }
 
     pub fn get_stream_stride(&self, stream: u8) -> usize {
+        if let Some(info) = self.stream_info(stream) {
+            return info.stride as usize;
+        }
         let mut stride = 0;
-        for ch in &self.m_VertexData.m_Channels {
+        for ch in self.channels() {
             if ch.stream == stream && (ch.dimension & 0xF) > 0 {
                 let size = Self::get_format_size(ch.format) * ((ch.dimension & 0xF) as usize);
                 let end = (ch.offset as usize) + size;
@@ -226,6 +329,9 @@ impl Mesh {
     }
 
     pub fn get_stream_offset(&self, stream: u8) -> usize {
+        if let Some(info) = self.stream_info(stream) {
+            return info.offset as usize;
+        }
         let mut offset = 0;
         let v_count = self.m_VertexData.m_VertexCount as usize;
         for s in 0..stream {
@@ -254,6 +360,9 @@ impl Mesh {
                     return Ok(result);
                 }
             }
+        }
+        if let Some(vertices) = self.m_Vertices.as_ref().filter(|v| !v.is_empty()) {
+            return Ok(vertices.iter().map(|v| crate::math::Vector3 { x: v.x, y: v.y, z: v.z }).collect());
         }
         self.extract_float_vector3(0)
     }
@@ -309,6 +418,9 @@ impl Mesh {
                 }
             }
         }
+        if let Some(normals) = self.m_Normals.as_ref().filter(|v| !v.is_empty()) {
+            return Ok(normals.iter().map(|v| crate::math::Vector3 { x: v.x, y: v.y, z: v.z }).collect());
+        }
         self.extract_float_vector3(1)
     }
 
@@ -320,7 +432,7 @@ impl Mesh {
                 }
             }
         }
-        let is_32bit = self.m_IndexFormat.unwrap_or(0) == 1;
+        let is_32bit = self.uses_32bit_indices();
         let mut result = Vec::with_capacity(self.m_IndexBuffer.len() / 2);
         let buf = &self.m_IndexBuffer;
         if is_32bit {
@@ -341,12 +453,12 @@ impl Mesh {
 
     pub fn triangles(&self) -> Result<Vec<Vec<[u32; 3]>>, String> {
         let indices = self.get_indices()?;
-        let index_size = if self.m_IndexFormat.unwrap_or(0) == 1 { 4 } else { 2 };
+        let index_size = if self.uses_32bit_indices() { 4 } else { 2 };
         Ok(self.m_SubMeshes.iter().map(|sub| {
             let first = (sub.firstByte / index_size) as usize;
             let end = first.saturating_add(sub.indexCount as usize).min(indices.len());
             let base = sub.baseVertex.unwrap_or(0);
-            topology_triangles(indices.get(first..end).unwrap_or(&[]), sub.topology).into_iter().map(|t| t.map(|i| i.wrapping_add(base))).collect()
+            topology_triangles(indices.get(first..end).unwrap_or(&[]), sub.topology()).into_iter().map(|t| t.map(|i| i.wrapping_add(base))).collect()
         }).collect())
     }
 
@@ -392,7 +504,7 @@ impl Mesh {
     }
 
     fn read_channel_with<T>(&self, channel: usize, read: fn(u8, &[u8]) -> Option<T>) -> Result<(usize, Vec<T>), String> {
-        let ch = self.m_VertexData.m_Channels.get(channel).ok_or_else(|| format!("Channel {} not found", channel))?;
+        let ch = self.channels().get(channel).ok_or_else(|| format!("Channel {} not found", channel))?;
         let dim = (ch.dimension & 0xF) as usize;
         if dim == 0 {
             return Ok((0, Vec::new()));
@@ -469,6 +581,9 @@ impl Mesh {
                     }
                 }
             }
+        }
+        if let Some(uvs) = self.m_UV.as_ref().filter(|v| !v.is_empty()) {
+            return Ok(uvs.iter().map(|v| (v.x, v.y)).collect());
         }
         let (dim, values) = self.read_channel(4)?;
         if dim < 2 {

@@ -78,19 +78,8 @@ impl<'a> TypeTreeReader<'a> {
                 }
             },
             "StreamingInfo" => {
-                let start_pos = self.reader.pos;
                 let end = self.get_node_end(nodes, *index);
-                let is_32bit = if start_pos + 12 <= self.reader.data.len() {
-                    let path_len_32 = u32::from_le_bytes(self.reader.data[start_pos + 8..start_pos + 12].try_into().unwrap()) as usize;
-                    if path_len_32 > 0 && path_len_32 < 1024 && start_pos + 12 + path_len_32 <= self.reader.data.len() {
-                        let path_bytes = &self.reader.data[start_pos + 12..start_pos + 12 + path_len_32];
-                        path_bytes.iter().all(|&b| b >= 32 && b <= 126)
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
+                let is_32bit = streaming_offset_is_32bit(nodes, *index);
                 let (offset, size, path) = if is_32bit {
                     let offset = self.reader.read_u32() as u64;
                     let size = self.reader.read_u32();
@@ -247,7 +236,7 @@ impl<'a> TypeTreeReader<'a> {
         *index += 1;
         while *index < end {
             let child_node = &nodes[*index];
-            if child_node.m_Name == "m_StreamData" && self.reader.pos + 16 > self.obj_end {
+            if child_node.m_Name == "m_StreamData" && self.reader.pos + if streaming_offset_is_32bit(nodes, *index) { 12 } else { 16 } > self.obj_end {
                 *index = self.get_node_end(nodes, *index) - 1;
                 *index += 1;
                 continue;
@@ -385,19 +374,8 @@ impl<'a> TypeTreeReader<'a> {
                 *index = self.get_node_end(nodes, *index) - 1;
             }
             "StreamingInfo" => {
-                let start_pos = self.reader.pos;
                 let end = self.get_node_end(nodes, *index);
-                let is_32bit = if start_pos + 12 <= self.reader.data.len() {
-                    let path_len_32 = u32::from_le_bytes(self.reader.data[start_pos + 8..start_pos + 12].try_into().unwrap()) as usize;
-                    if path_len_32 > 0 && path_len_32 < 1024 && start_pos + 12 + path_len_32 <= self.reader.data.len() {
-                        let path_bytes = &self.reader.data[start_pos + 12..start_pos + 12 + path_len_32];
-                        path_bytes.iter().all(|&b| b >= 32 && b <= 126)
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
+                let is_32bit = streaming_offset_is_32bit(nodes, *index);
                 if is_32bit {
                     self.reader.pos += 8;
                     let len = self.reader.read_i32();
@@ -501,4 +479,8 @@ impl<'a> TypeTreeReader<'a> {
         }
         *index = end - 1;
     }
+}
+
+fn streaming_offset_is_32bit(nodes: &[TypeTreeNode], index: usize) -> bool {
+    nodes.get(index + 1).is_some_and(|node| node.m_Name == "offset" && matches!(node.m_Type.as_str(), "unsigned int" | "UInt32" | "int" | "SInt32"))
 }
