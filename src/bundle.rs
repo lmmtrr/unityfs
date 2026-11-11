@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use crate::reader::{ByteSource, Endian, Reader};
 use crate::unity_version::UnityVersion;
+use crate::unitycn::Decryptor;
 
 pub struct Bundle {
     pub engine_version: UnityVersion,
@@ -56,6 +57,7 @@ pub struct BundleFile {
     pub blocks: Vec<StorageBlock>,
     pub nodes: Vec<BundleNode>,
     cache: Mutex<HashMap<usize, Arc<Vec<u8>>>>,
+    decryptor: Option<Decryptor>,
 }
 
 impl BundleFile {
@@ -66,8 +68,8 @@ impl BundleFile {
             endian: Endian::Big,
             unity_version: UnityVersion::default(),
         };
-        let signature = reader.read_bytes(8);
-        if signature.len() < 7 || &signature[..7] != b"UnityFS" {
+        let signature = reader.read_string_null();
+        if !matches!(signature.as_str(), "UnityFS" | "UnityWeb" | "UnityRaw") {
             return Err("Invalid bundle signature".to_string());
         }
         let version = reader.read_u32();
@@ -77,10 +79,22 @@ impl BundleFile {
         if engine_version.is_empty() {
             engine_version = UnityVersion::new(2020, 3, 34, crate::unity_version::UnityVersionType::Final, 1);
         }
+        if signature != "UnityFS" && version != 6 {
+            return Self::open_web_raw(source, reader, signature == "UnityWeb", version, engine_version);
+        }
         let total_size = reader.read_i64();
         let compressed_size = reader.read_u32();
         let uncompressed_size = reader.read_u32();
         let flags = reader.read_u32();
+        if signature != "UnityFS" {
+            reader.read_u8();
+        }
+        let is_old_dataflags = engine_version.major() < 2020
+            || (engine_version.major() == 2020 && engine_version < (2020, 3, 34))
+            || (engine_version.major() == 2021 && engine_version < (2021, 3, 2))
+            || (engine_version.major() == 2022 && engine_version < (2022, 1, 1));
+        let encrypted = flags & (if is_old_dataflags { 0x200 } else { 0x1400 }) != 0;
+        let decryptor = if encrypted { Some(Decryptor::read(&mut reader)?) } else { None };
         if version >= 7 || (engine_version.major() == 2019 && engine_version >= (2019, 4, 15)) {
             reader.align(16);
         }
@@ -96,16 +110,12 @@ impl BundleFile {
             return Err("Truncated bundle: blocks info out of range".to_string());
         }
         let blocks_info_data = &source[info_pos..info_end];
-        let is_old_dataflags = engine_version.major() < 2020
-            || (engine_version.major() == 2020 && engine_version < (2020, 3, 34))
-            || (engine_version.major() == 2021 && engine_version < (2021, 3, 2))
-            || (engine_version.major() == 2022 && engine_version < (2022, 1, 1));
         let need_padding = !is_old_dataflags && (flags & 0x200 != 0);
         let mut data_start = if info_at_end { header_end } else { info_end };
-        if !info_at_end && need_padding {
+        if need_padding {
             data_start = (data_start + 15) & !15;
         }
-        let info = decompress_block(blocks_info_data, flags as u16, uncompressed_size as usize)
+        let info = decrypt_and_decompress(decryptor.as_ref(), blocks_info_data, flags as u16, 0, uncompressed_size as usize)
             .map_err(|e| format!("blocks info: {}", e))?;
         let mut br = Reader::new(info, engine_version.clone());
         br.endian = Endian::Big;
@@ -146,7 +156,43 @@ impl BundleFile {
                 name: br.read_string_null(),
             });
         }
-        Ok(Self { source, engine_version, blocks, nodes, cache: Mutex::new(HashMap::new()) })
+        Ok(Self { source, engine_version, blocks, nodes, cache: Mutex::new(HashMap::new()), decryptor })
+    }
+
+    fn open_web_raw(source: ByteSource, mut reader: Reader, compressed: bool, version: u32, engine_version: UnityVersion) -> Result<Self, String> {
+        if version >= 4 {
+            reader.read_bytes(16);
+            reader.read_u32();
+        }
+        reader.read_u32();
+        let header_size = reader.read_u32() as usize;
+        reader.read_u32();
+        let level_count = reader.read_i32().max(1) as usize;
+        reader.pos = reader.pos.saturating_add(8 * (level_count - 1));
+        let compressed_size = reader.read_u32() as usize;
+        let end = header_size.checked_add(compressed_size).filter(|&e| e <= source.len()).ok_or("Truncated bundle: data out of range")?;
+        let (data, start): (ByteSource, usize) = if compressed {
+            let mut out = Vec::new();
+            lzma_rs::lzma_decompress(&mut &source[header_size..end], &mut out).map_err(|e| format!("LZMA: {}", e))?;
+            (out.into(), 0)
+        } else {
+            (source.clone(), header_size)
+        };
+        let size = if compressed { data.len() } else { compressed_size };
+        let mut directory = Reader { data: data.clone(), pos: start, endian: Endian::Big, unity_version: engine_version.clone() };
+        let node_count = directory.read_i32().max(0) as usize;
+        if node_count > size / 9 {
+            return Err("Truncated bundle: node table out of range".to_string());
+        }
+        let mut nodes = Vec::with_capacity(node_count);
+        for _ in 0..node_count {
+            let name = directory.read_string_null();
+            let offset = directory.read_u32() as u64;
+            let node_size = directory.read_u32() as u64;
+            nodes.push(BundleNode { offset, size: node_size, flags: 0, name });
+        }
+        let block = StorageBlock { uncompressed_size: size as u32, compressed_size: size as u32, flags: 0, uncompressed_offset: 0, compressed_offset: start as u64 };
+        Ok(Self { source: data, engine_version, blocks: vec![block], nodes, cache: Mutex::new(HashMap::new()), decryptor: None })
     }
 
     pub fn open_path<P: AsRef<std::path::Path>>(path: P) -> Result<Self, String> {
@@ -163,7 +209,7 @@ impl BundleFile {
         let start = b.compressed_offset as usize;
         let raw = &self.source[start..start + b.compressed_size as usize];
         let data = Arc::new(
-            decompress_block(raw, b.flags, b.uncompressed_size as usize)
+            decrypt_and_decompress(self.decryptor.as_ref(), raw, b.flags, index, b.uncompressed_size as usize)
                 .map_err(|e| format!("block {}: {}", index, e))?,
         );
         self.cache.lock().unwrap().insert(index, data.clone());
@@ -208,6 +254,17 @@ impl BundleFile {
 
     pub fn clear_cache(&self) {
         self.cache.lock().unwrap().clear();
+    }
+}
+
+fn decrypt_and_decompress(decryptor: Option<&Decryptor>, data: &[u8], flags: u16, index: usize, uncompressed_size: usize) -> Result<Vec<u8>, String> {
+    match decryptor.filter(|_| flags & 0x100 != 0 && flags & 0x3F != 0) {
+        Some(decryptor) => {
+            let mut plain = data.to_vec();
+            decryptor.decrypt_block(&mut plain, index);
+            decompress_block(&plain, flags, uncompressed_size)
+        }
+        None => decompress_block(data, flags, uncompressed_size),
     }
 }
 

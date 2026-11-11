@@ -55,7 +55,7 @@ impl Metadata {
     pub fn open(path: &Path) -> Result<Self, String> {
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
         let mmap = unsafe { memmap2::Mmap::map(&file).map_err(|e| e.to_string())? };
-        if mmap.starts_with(b"UnityFS\0") {
+        if crate::extractor::is_unity_bundle(&mmap) {
             let bundle = BundleFile::open(ByteSource::Mmap(Arc::new(mmap)))?;
             let mut files = Vec::new();
             for (i, node) in bundle.nodes.iter().enumerate() {
@@ -163,6 +163,15 @@ impl Metadata {
         let (objects, others): (Vec<_>, Vec<_>) = assets.into_iter().partition(|o| o.class_id == 1);
         objects.into_iter().chain(others).find_map(|o| self.object_name(entry, o))
     }
+}
+
+pub fn looks_like_old_serialized_file(head: &[u8], file_len: u64) -> bool {
+    if head.len() < 16 {
+        return false;
+    }
+    let be32 = |at: usize| u32::from_be_bytes([head[at], head[at + 1], head[at + 2], head[at + 3]]) as u64;
+    let (meta, file_size, version, data_offset) = (be32(0), be32(4), be32(8), be32(12));
+    (1..=8).contains(&version) && file_size == file_len && meta > 0 && meta < file_size && data_offset <= file_size
 }
 
 pub fn looks_like_serialized_file(head: &[u8]) -> bool {

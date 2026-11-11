@@ -241,7 +241,7 @@ impl SerializedFile {
             nodes = if version >= 12 || version == 10 {
                 Self::read_type_tree_blob(reader, version)
             } else {
-                Self::read_type_tree_recursive(reader, 0)
+                Self::read_type_tree_recursive(reader, version, 0)
             };
             if version >= 21 {
                 if is_ref_type {
@@ -258,15 +258,18 @@ impl SerializedFile {
         (SerializedType { class_id, nodes: nodes.into() }, ref_type_info)
     }
 
-    fn read_type_tree_recursive(reader: &mut Reader, level: i8) -> Vec<TypeTreeNode> {
+    fn read_type_tree_recursive(reader: &mut Reader, version: u32, level: i8) -> Vec<TypeTreeNode> {
         let mut type_tree = Vec::new();
         let m_type = reader.read_string_null();
         let m_name = reader.read_string_null();
         let m_byte_size = reader.read_i32();
-        let m_index = reader.read_i32();
+        if version == 2 {
+            reader.read_i32();
+        }
+        let m_index = if version != 3 { reader.read_i32() } else { 0 };
         let m_is_array = reader.read_i32() != 0;
         let m_version = reader.read_i32() as i16;
-        let m_meta_flag = reader.read_i32();
+        let m_meta_flag = if version != 3 { reader.read_i32() } else { 0 };
         type_tree.push(TypeTreeNode {
             m_Version: m_version,
             m_Level: level,
@@ -281,8 +284,11 @@ impl SerializedFile {
             m_Name: m_name,
         });
         let num_fields = reader.read_u32();
+        if level == i8::MAX || num_fields as usize > reader.data.len().saturating_sub(reader.pos) {
+            return type_tree;
+        }
         for _ in 0..num_fields {
-            type_tree.extend(Self::read_type_tree_recursive(reader, level + 1));
+            type_tree.extend(Self::read_type_tree_recursive(reader, version, level + 1));
         }
         type_tree
     }
@@ -389,7 +395,8 @@ impl SerializedFile {
         let type_id = reader.read_i32();
         let (class_id, mut nodes) = if version < 16 {
             let class_id = reader.read_u16() as i32;
-            (class_id, std::sync::Arc::from(Vec::new()))
+            let embedded = types.iter().find(|t| t.class_id == type_id).map(|t| t.nodes.clone());
+            (class_id, embedded.unwrap_or_else(|| std::sync::Arc::from(Vec::new())))
         } else {
             match types.get(type_id as usize) {
                 Some(typ) => (typ.class_id, typ.nodes.clone()),

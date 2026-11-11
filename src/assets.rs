@@ -34,7 +34,7 @@ impl AssetManager {
 
     pub fn from_source(data: ByteSource, name: &str) -> Result<Self, String> {
         let mut manager = Self::new();
-        if data.starts_with(b"UnityFS") {
+        if crate::extractor::is_unity_bundle(&data) {
             let bundle = BundleFile::open(data)?;
             for (i, node) in bundle.nodes.iter().enumerate() {
                 let bytes = bundle.read_node(i)?;
@@ -45,7 +45,7 @@ impl AssetManager {
                     manager.add_file(node.name.clone(), sf);
                 }
             }
-        } else if crate::metadata::looks_like_serialized_file(&data) {
+        } else if crate::metadata::looks_like_serialized_file(&data) || crate::metadata::looks_like_old_serialized_file(&data, data.len() as u64) {
             manager.add_serialized_file(name.to_string(), data);
         } else {
             return Err("not a Unity bundle or SerializedFile".to_string());

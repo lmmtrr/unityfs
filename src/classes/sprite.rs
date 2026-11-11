@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::assets::AssetManager;
 use crate::classes::mesh::{topology_triangles, Mesh};
 use crate::export_common::texture_image;
-use crate::extractor::decompress_texture;
+use crate::extractor::decompress_unity_texture;
 use crate::unity_version::UnityVersion;
 use crate::value::UnityValue;
 use crate::math::{Rect, Vector2};
@@ -252,12 +252,11 @@ fn decode_texture(asset_manager: &AssetManager, texture: &TextureRef) -> Option<
     let value = asset_manager.read_object_value(&texture.0, 0, texture.1).ok()?;
     let width = value.get("m_Width")?.as_i32()? as usize;
     let height = value.get("m_Height")?.as_i32()? as usize;
-    let format = value.get("m_TextureFormat")?.as_i32()?;
     let data = texture_image(&value, asset_manager);
     if width == 0 || height == 0 || data.is_empty() {
         return None;
     }
-    let rgba = decompress_texture(width, height, format, &data, &sf.unity_version, false)?;
+    let rgba = decompress_unity_texture(&value, &data, &sf.unity_version, sf.target_platform, false)?;
     Some(SpriteImage { width, height, rgba })
 }
 

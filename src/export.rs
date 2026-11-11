@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use crate::assets::AssetManager;
 use crate::classes::TryFromUnityValue;
 use crate::classes::mesh::Mesh;
-use crate::extractor::decompress_texture;
+use crate::extractor::decompress_unity_texture;
 use crate::value::UnityValue;
 use crate::export_common::{self as common, PosePartData};
 
@@ -60,7 +60,7 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
                 }
             };
             let success = match class_id {
-                28 => extract_texture2d(&unity_value, &sf.unity_version, &bundle_output_dir, &asset_manager, flat, pb),
+                28 => extract_texture2d(&unity_value, &sf.unity_version, sf.target_platform, &bundle_output_dir, &asset_manager, flat, pb),
                 49 => extract_text_asset(&unity_value, &bundle_output_dir, flat, pb),
                 213 => extract_sprite(&unity_value, asset_name, &mut sprites, &bundle_output_dir, pb),
                 43 => extract_mesh(&unity_value, &sf.unity_version, &bundle_output_dir, &asset_manager, flat, pb),
@@ -320,6 +320,7 @@ fn extract_text_asset(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &L
 fn extract_texture2d(
     val: &UnityValue,
     version: &crate::unity_version::UnityVersion,
+    platform: i32,
     output_dir: &Path,
     asset_manager: &AssetManager,
     by_file: bool,
@@ -348,7 +349,7 @@ fn extract_texture2d(
     if image_data.is_empty() {
         return false;
     }
-    if let Some(rgba_data) = decompress_texture(width, height, format, &image_data, version, true) {
+    if let Some(rgba_data) = decompress_unity_texture(val, &image_data, version, platform, true) {
         let png = match encode_png(&rgba_data, width, height) {
             Ok(png) => png,
             Err(e) => {
