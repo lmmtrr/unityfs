@@ -6,6 +6,8 @@ use crate::math::{Rect, Vector2};
 
 const SPRITE_ATLAS_CLASS_ID: i32 = 687078895;
 
+pub const PACKING_ROTATE_90: u32 = 4;
+
 type RenderDataKey = ([u32; 4], i64);
 
 #[allow(non_snake_case)]
@@ -54,6 +56,7 @@ pub struct RenderData {
     pub texture: Option<(String, i64)>,
     pub texture_rect: Option<Rect>,
     pub texture_rect_offset: Option<Vector2>,
+    pub packing_rotation: u32,
 }
 
 struct LoadedAtlas {
@@ -130,9 +133,11 @@ fn read_render_data(asset_manager: &AssetManager, file: &str, data: &UnityValue)
         Some(UnityValue::PPtr { file_id, path_id }) if *path_id != 0 => asset_manager.resolve_pptr(file, *file_id, *path_id).map(|(name, _)| (name.to_string(), *path_id)),
         _ => None,
     };
+    let settings = data.get("settingsRaw").and_then(|v| v.as_i64()).unwrap_or(0) as u32;
     RenderData {
         texture,
         texture_rect: data.get("textureRect").map(read_rect),
         texture_rect_offset: data.get("textureRectOffset").map(read_vector2),
+        packing_rotation: if settings & 1 != 0 { (settings >> 2) & 0xF } else { 0 },
     }
 }

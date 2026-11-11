@@ -354,6 +354,22 @@ pub fn decompress_texture(width: usize, height: usize, format: i32, image_data: 
     }
 }
 
+fn sanitized_base_name(name: &str) -> String {
+    let base_name = Path::new(name).file_name().map_or_else(|| name.to_string(), |f| f.to_string_lossy().to_string());
+    base_name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-' && c != '.', "")
+}
+
+pub fn texture_file_name(name: &str) -> Option<String> {
+    let base = sanitized_base_name(name);
+    if base.is_empty() {
+        None
+    } else if base.ends_with(".png") {
+        Some(base)
+    } else {
+        Some(format!("{}.png", base))
+    }
+}
+
 fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Result<Vec<PathBuf>, String> {
     let mut extracted_files = Vec::new();
     let mut pose_parts = Vec::new();
@@ -372,11 +388,7 @@ fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Resul
                 Some(UnityValue::String(s)) if !s.is_empty() => s.clone(),
                 _ => continue,
             };
-            let base_name = Path::new(&name)
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or(name);
-            let sanitized_base = base_name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-' && c != '.', "");
+            let sanitized_base = sanitized_base_name(&name);
             if sanitized_base.is_empty() {
                 continue;
             }
@@ -438,12 +450,7 @@ fn extract_assets_internal(asset_manager: AssetManager, out_dir: &Path) -> Resul
                     continue;
                 }
                 let decompressed = decompress_texture(width, height, format, &image_data, &sf.unity_version, true);
-                if let Some(rgba_data) = decompressed {
-                    let final_name = if sanitized_base.ends_with(".png") {
-                        sanitized_base.clone()
-                    } else {
-                        format!("{}.png", sanitized_base)
-                    };
+                if let (Some(rgba_data), Some(final_name)) = (decompressed, texture_file_name(&name)) {
                     let dest = out_dir.join(&final_name);
                     if save_png(&dest, &rgba_data, width as u32, height as u32).is_ok() {
                         extracted_files.push(dest);
