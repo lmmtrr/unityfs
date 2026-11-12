@@ -9,7 +9,49 @@ pub struct TypeTreeReader<'a> {
     pub ref_types: &'a [crate::serializedfile::RefType],
     pub class_id: i32,
     pub skip: &'a [&'a str],
+    pub packed: &'a [&'a str],
 }
+
+#[derive(Clone, Copy)]
+enum Prim {
+    Bool,
+    I8,
+    U8,
+    I16,
+    U16,
+    I32,
+    U32,
+    I64,
+    U64,
+    F32,
+    F64,
+}
+
+impl Prim {
+    fn of(type_name: &str) -> Option<(Prim, usize)> {
+        Some(match type_name {
+            "bool" => (Prim::Bool, 1),
+            "SInt8" => (Prim::I8, 1),
+            "UInt8" | "char" => (Prim::U8, 1),
+            "SInt16" | "short" => (Prim::I16, 2),
+            "UInt16" | "unsigned short" => (Prim::U16, 2),
+            "int" | "SInt32" => (Prim::I32, 4),
+            "unsigned int" | "UInt32" | "Type*" => (Prim::U32, 4),
+            "long long" | "SInt64" => (Prim::I64, 8),
+            "unsigned long long" | "UInt64" | "FileSize" => (Prim::U64, 8),
+            "float" => (Prim::F32, 4),
+            "double" => (Prim::F64, 8),
+            _ => return None,
+        })
+    }
+}
+
+enum Plan {
+    Prim(Prim),
+    Map(Vec<(String, Plan)>),
+}
+
+const PLAN_MIN_ELEMENTS: i32 = 16;
 
 fn should_ignore_field(name: &str) -> bool {
     name == "m_BakedConvexCollisionMesh" || name == "m_BakedTriangleCollisionMesh" || name == "m_VariableBoneCountWeights"
@@ -17,7 +59,7 @@ fn should_ignore_field(name: &str) -> bool {
 
 impl<'a> TypeTreeReader<'a> {
     pub fn new(reader: &'a mut Reader, obj_end: usize, ref_types: &'a [crate::serializedfile::RefType], class_id: i32) -> Self {
-        Self { reader, obj_end, ref_types, class_id, skip: &[] }
+        Self { reader, obj_end, ref_types, class_id, skip: &[], packed: &[] }
     }
 
     pub fn read(&mut self, nodes: &[TypeTreeNode]) -> UnityValue {
@@ -193,7 +235,48 @@ impl<'a> TypeTreeReader<'a> {
                 }
             }
         }
+        if self.packed.contains(&nodes[container_index].m_Name.as_str())
+            && let Some((plan, element_size)) = self.plan(nodes, element_node_start)
+            && element_size * size as usize <= self.obj_end.saturating_sub(self.reader.pos)
+        {
+            let mut leaves = Vec::new();
+            if Self::word_leaves(&plan, "", &mut leaves) {
+                let mut data = Vec::with_capacity(size as usize * leaves.len() * 4);
+                for _ in 0..size {
+                    for (_, kind) in &leaves {
+                        let word = match kind {
+                            b'f' => self.reader.read_f32().to_bits(),
+                            b'i' => self.reader.read_i32() as u32,
+                            _ => self.reader.read_u32(),
+                        };
+                        data.extend_from_slice(&word.to_le_bytes());
+                    }
+                }
+                *index = end - 1;
+                if align_array {
+                    self.reader.align(4);
+                }
+                let mut map = BTreeMap::new();
+                map.insert("$fields".to_string(), UnityValue::Array(leaves.iter().map(|(name, _)| UnityValue::String(name.clone())).collect()));
+                map.insert("$kinds".to_string(), UnityValue::String(leaves.iter().map(|(_, kind)| *kind as char).collect()));
+                map.insert("$data".to_string(), UnityValue::Bytes(data));
+                return UnityValue::Map(map);
+            }
+        }
         let mut arr = Vec::with_capacity(size.min(1_000_000) as usize);
+        if size >= PLAN_MIN_ELEMENTS
+            && let Some((plan, element_size)) = self.plan(nodes, element_node_start)
+            && element_size * size as usize <= self.obj_end.saturating_sub(self.reader.pos)
+        {
+            for _ in 0..size {
+                arr.push(self.read_plan(&plan));
+            }
+            *index = end - 1;
+            if align_array {
+                self.reader.align(4);
+            }
+            return UnityValue::Array(arr);
+        }
         for _ in 0..size {
             if self.reader.pos >= self.obj_end {
                 break;
@@ -206,6 +289,78 @@ impl<'a> TypeTreeReader<'a> {
             self.reader.align(4);
         }
         UnityValue::Array(arr)
+    }
+
+    fn plan(&self, nodes: &[TypeTreeNode], start: usize) -> Option<(Plan, usize)> {
+        let node = &nodes[start];
+        let name = node.m_Name.as_str();
+        if (node.m_MetaFlag & 0x4000) != 0 || should_ignore_field(name) || self.skip.contains(&name) || name == "m_StreamData" {
+            return None;
+        }
+        let end = self.get_node_end(nodes, start);
+        if end == start + 1 {
+            return Prim::of(&node.m_Type).map(|(p, size)| (Plan::Prim(p), size));
+        }
+        if Prim::of(&node.m_Type).is_some()
+            || matches!(node.m_Type.as_str(), "string" | "TypelessData" | "StreamingInfo" | "ReferencedObject")
+            || node.m_Type.starts_with("PPtr<")
+            || nodes[start + 1].m_Type == "Array"
+        {
+            return None;
+        }
+        let mut fields = Vec::new();
+        let mut size = 0;
+        let mut i = start + 1;
+        while i < end {
+            let (plan, field_size) = self.plan(nodes, i)?;
+            fields.push((nodes[i].m_Name.clone(), plan));
+            size += field_size;
+            i = self.get_node_end(nodes, i);
+        }
+        Some((Plan::Map(fields), size))
+    }
+
+    fn word_leaves(plan: &Plan, prefix: &str, out: &mut Vec<(String, u8)>) -> bool {
+        match plan {
+            Plan::Prim(Prim::F32) => out.push((prefix.to_string(), b'f')),
+            Plan::Prim(Prim::I32) => out.push((prefix.to_string(), b'i')),
+            Plan::Prim(Prim::U32) => out.push((prefix.to_string(), b'u')),
+            Plan::Prim(_) => return false,
+            Plan::Map(fields) => {
+                for (name, field) in fields {
+                    let path = if prefix.is_empty() { name.clone() } else { format!("{prefix}.{name}") };
+                    if !Self::word_leaves(field, &path, out) {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    fn read_plan(&mut self, plan: &Plan) -> UnityValue {
+        match plan {
+            Plan::Prim(p) => match p {
+                Prim::Bool => UnityValue::Boolean(self.reader.read_u8() != 0),
+                Prim::I8 => UnityValue::Int8(self.reader.read_i8()),
+                Prim::U8 => UnityValue::UInt8(self.reader.read_u8()),
+                Prim::I16 => UnityValue::Int16(self.reader.read_i16()),
+                Prim::U16 => UnityValue::UInt16(self.reader.read_u16()),
+                Prim::I32 => UnityValue::Int32(self.reader.read_i32()),
+                Prim::U32 => UnityValue::UInt32(self.reader.read_u32()),
+                Prim::I64 => UnityValue::Int64(self.reader.read_i64()),
+                Prim::U64 => UnityValue::UInt64(self.reader.read_u64()),
+                Prim::F32 => UnityValue::Float(self.reader.read_f32()),
+                Prim::F64 => UnityValue::Double(self.reader.read_f64()),
+            },
+            Plan::Map(fields) => {
+                let mut map = BTreeMap::new();
+                for (name, field) in fields {
+                    map.insert(name.clone(), self.read_plan(field));
+                }
+                UnityValue::Map(map)
+            }
+        }
     }
 
     fn read_pptr(&mut self, nodes: &[TypeTreeNode], index: &mut usize) -> UnityValue {

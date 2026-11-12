@@ -146,6 +146,10 @@ impl AssetManager {
     }
 
     pub fn read_object_skipping(&self, source_file_name: &str, file_id: i32, path_id: i64, skip: &[&str]) -> Result<crate::value::UnityValue, String> {
+        self.read_object_with(source_file_name, file_id, path_id, skip, &[])
+    }
+
+    pub fn read_object_with(&self, source_file_name: &str, file_id: i32, path_id: i64, skip: &[&str], packed: &[&str]) -> Result<crate::value::UnityValue, String> {
         let (file_name, obj) = self.resolve_pptr(source_file_name, file_id, path_id).ok_or("Failed to resolve PPtr")?;
         let sf = self.get_file_by_name(file_name).unwrap().1;
         let mut reader = crate::reader::Reader {
@@ -154,7 +158,7 @@ impl AssetManager {
             endian: sf.endian,
             unity_version: sf.unity_version.clone(),
         };
-        obj.read_typetree_skipping(&mut reader, &sf.ref_types, skip)
+        obj.read_typetree_with(&mut reader, &sf.ref_types, skip, packed)
     }
 }
 

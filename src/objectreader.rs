@@ -36,6 +36,10 @@ impl ObjectReader {
     }
 
     pub fn read_typetree_skipping(&self, reader: &mut Reader, ref_types: &[crate::serializedfile::RefType], skip: &[&str]) -> Result<UnityValue, String> {
+        self.read_typetree_with(reader, ref_types, skip, &[])
+    }
+
+    pub fn read_typetree_with(&self, reader: &mut Reader, ref_types: &[crate::serializedfile::RefType], skip: &[&str], packed: &[&str]) -> Result<UnityValue, String> {
         let nodes = match &self.serialized_type {
             Some(t) if !t.nodes.is_empty() => &t.nodes,
             _ => return Err(format!("No TypeTree nodes found for class_id {}", self.class_id)),
@@ -43,6 +47,7 @@ impl ObjectReader {
         let mut obj_reader = reader.absolute_reader(self.byte_start, self.byte_size);
         let mut tt_reader = TypeTreeReader::new(&mut obj_reader, self.byte_start.saturating_add(self.byte_size), ref_types, self.class_id);
         tt_reader.skip = skip;
+        tt_reader.packed = packed;
         Ok(tt_reader.read(nodes))
     }
 
