@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use crate::assets::AssetManager;
 use crate::classes::TryFromUnityValue;
-use crate::classes::mesh::Mesh;
 use crate::extractor::decompress_unity_texture;
 use crate::value::UnityValue;
 use crate::export_common::{self as common, PosePartData};
@@ -10,6 +9,7 @@ use crate::export_common::{self as common, PosePartData};
 pub struct ExportOptions {
     pub by_file: bool,
     pub metadata: bool,
+    pub classes: Option<Vec<i32>>,
 }
 
 struct Log;
@@ -42,8 +42,11 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
         objects.sort_by_key(|o| o.class_id == 213);
         for obj in objects {
             let class_id = obj.class_id;
+            if options.classes.as_ref().is_some_and(|c| !c.contains(&class_id)) {
+                continue;
+            }
             let supported = match class_id {
-                28 | 49 | 43 | 83 | 48 | 128 | 152 | 329 | 114 | 213 => true,
+                28 | 49 | 83 | 48 | 128 | 152 | 329 | 114 | 213 => true,
                 1 | 4 | 21 | 74 | 115 => options.metadata,
                 _ => false,
             };
@@ -63,7 +66,6 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
                 28 => extract_texture2d(&unity_value, &sf.unity_version, sf.target_platform, &bundle_output_dir, &asset_manager, flat, pb),
                 49 => extract_text_asset(&unity_value, &bundle_output_dir, flat, pb),
                 213 => extract_sprite(&unity_value, asset_name, &mut sprites, &bundle_output_dir, pb),
-                43 => extract_mesh(&unity_value, &sf.unity_version, &bundle_output_dir, &asset_manager, flat, pb),
                 83 => extract_audioclip(&unity_value, &bundle_output_dir, &asset_manager, asset_name, flat, pb),
                 128 => extract_font(&unity_value, &bundle_output_dir, flat, pb),
                 48 => extract_shader(&unity_value, &bundle_output_dir, flat, pb),
@@ -394,73 +396,6 @@ fn extract_sprite(val: &UnityValue, asset_name: &str, sprites: &mut crate::class
     let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
     let filename = if safe_name.is_empty() { "sprite.png".to_string() } else { format!("{}.png", safe_name) };
     write_unique(output_dir, &filename, &png, "sprite", pb)
-}
-
-fn extract_mesh(val: &UnityValue, version: &crate::unity_version::UnityVersion, output_dir: &Path, asset_manager: &AssetManager, by_file: bool, pb: &Log) -> bool {
-    let name = match val.get("m_Name") {
-        Some(UnityValue::String(s)) if !s.is_empty() => s.clone(),
-        _ => "mesh".to_string(),
-    };
-    let finite = |x: f32| if x.is_nan() { 0.0 } else { x };
-    let mesh = match Mesh::read_with_resources(val, version, asset_manager) {
-        Ok(mesh) => mesh,
-        Err(e) => {
-            pb.println(format!("    Failed to read Mesh '{}': {}", name, e));
-            return false;
-        }
-    };
-    let vertices = mesh.get_vertices().unwrap_or_default();
-    let submeshes = mesh.triangles().unwrap_or_default();
-    let uvs = mesh.extract_uvs().unwrap_or_default();
-    let normals = mesh.get_normals().unwrap_or_default();
-    if vertices.is_empty() {
-        return false;
-    }
-    let mut obj_content = format!("g {}\n", name);
-    for v in &vertices {
-        obj_content.push_str(&format!("v {} {} {}\n", finite(-v.x), finite(v.y), finite(v.z)));
-    }
-    for uv in &uvs {
-        obj_content.push_str(&format!("vt {} {}\n", finite(uv.0), finite(uv.1)));
-    }
-    for n in &normals {
-        obj_content.push_str(&format!("vn {} {} {}\n", finite(-n.x), finite(n.y), finite(n.z)));
-    }
-    let corner = |i: u32| match (!uvs.is_empty(), !normals.is_empty()) {
-        (true, true) => format!("{0}/{0}/{0}", i + 1),
-        (true, false) => format!("{0}/{0}", i + 1),
-        (false, true) => format!("{0}//{0}", i + 1),
-        (false, false) => (i + 1).to_string(),
-    };
-    for (i, triangles) in submeshes.iter().enumerate() {
-        obj_content.push_str(&format!("g {}_{}\n", name, i));
-        for t in triangles.iter().filter(|t| t.iter().all(|&v| (v as usize) < vertices.len())) {
-            obj_content.push_str(&format!("f {} {} {}\n", corner(t[2]), corner(t[1]), corner(t[0])));
-        }
-    }
-    let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
-    let filename = if safe_name.is_empty() {
-        "mesh.obj".to_string()
-    } else {
-        format!("{}.obj", safe_name)
-    };
-    let mesh_dir = if by_file {
-        output_dir.to_path_buf()
-    } else {
-        output_dir.join("Mesh")
-    };
-    let _ = std::fs::create_dir_all(&mesh_dir);
-    match get_unique_path(&mesh_dir, &filename, obj_content.as_bytes()) {
-        UniquePathResult::New(dest) => {
-            if let Err(e) = std::fs::write(&dest, obj_content) {
-                pb.println(format!("    Failed to write Mesh OBJ '{}': {}", dest.display(), e));
-                false
-            } else {
-                true
-            }
-        }
-        UniquePathResult::Exists => true,
-    }
 }
 
 fn extract_audioclip(
