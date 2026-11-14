@@ -119,38 +119,50 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
     if !pose_parts_vec.is_empty() {
         let stem = moc_stem.into_inner().unwrap().unwrap_or_else(|| file_stem.to_string());
         if let Some(serialized) = common::pose_json(pose_parts_vec) {
-            let _ = std::fs::create_dir_all(&bundle_output_dir);
-            if let UniquePathResult::New(dest) = get_unique_path(&bundle_output_dir, &format!("{}.pose3.json", stem), &serialized) {
-                if let Err(e) = std::fs::write(&dest, &serialized) {
-                    pb.println(format!("    Failed to write pose asset '{}': {}", dest.display(), e));
-                }
-            }
+            write_unique(&bundle_output_dir, &format!("{}.pose3.json", stem), &serialized, "pose asset", pb);
         }
     }
     Ok(count)
-}
-
-#[derive(Debug)]
-enum UniquePathResult {
-    New(PathBuf),
-    Exists,
 }
 
 fn same_file(path: &Path, data: &[u8]) -> bool {
     std::fs::metadata(path).is_ok_and(|m| m.len() == data.len() as u64) && std::fs::read(path).is_ok_and(|existing| existing == data)
 }
 
-fn get_unique_path(dir: &Path, filename: &str, data: &[u8]) -> UniquePathResult {
+pub fn export_file_name(name: &str, fallback: &str) -> String {
+    common::file_stem(name, fallback)
+}
+
+fn create_unique(dir: &Path, filename: &str, data: Option<&[u8]>) -> std::io::Result<Option<PathBuf>> {
+    std::fs::create_dir_all(dir)?;
     let mut candidate = dir.join(filename);
     let mut counter = 2;
-    while candidate.exists() {
-        if same_file(&candidate, data) {
-            return UniquePathResult::Exists;
+    loop {
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(mut file) => {
+                if let Some(data) = data {
+                    std::io::Write::write_all(&mut file, data)?;
+                }
+                return Ok(Some(candidate));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if data.is_some_and(|d| same_file(&candidate, d)) {
+                    return Ok(None);
+                }
+                candidate = dir.join(common::numbered_name(filename, counter));
+                counter += 1;
+            }
+            Err(e) => return Err(e),
         }
-        candidate = dir.join(common::numbered_name(filename, counter));
-        counter += 1;
     }
-    UniquePathResult::New(candidate)
+}
+
+pub fn write_unique_file(dir: &Path, filename: &str, data: &[u8]) -> std::io::Result<Option<PathBuf>> {
+    create_unique(dir, filename, Some(data))
+}
+
+pub fn reserve_unique_file(dir: &Path, filename: &str) -> std::io::Result<PathBuf> {
+    create_unique(dir, filename, None).map(|p| p.unwrap_or_else(|| dir.join(filename)))
 }
 
 fn encode_png(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>, image::ImageError> {
@@ -160,16 +172,12 @@ fn encode_png(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>, image
 }
 
 fn write_unique(dir: &Path, filename: &str, data: &[u8], what: &str, pb: &Log) -> bool {
-    let _ = std::fs::create_dir_all(dir);
-    match get_unique_path(dir, filename, data) {
-        UniquePathResult::New(dest) => match std::fs::write(&dest, data) {
-            Ok(()) => true,
-            Err(e) => {
-                pb.println(format!("    Failed to write {} '{}': {}", what, dest.display(), e));
-                false
-            }
-        },
-        UniquePathResult::Exists => true,
+    match write_unique_file(dir, filename, data) {
+        Ok(_) => true,
+        Err(e) => {
+            pb.println(format!("    Failed to write {} '{}': {}", what, dir.join(filename).display(), e));
+            false
+        }
     }
 }
 
@@ -327,18 +335,7 @@ fn extract_text_asset(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &L
         } else {
             output_dir.join("TextAsset")
         };
-        let _ = std::fs::create_dir_all(&text_dir);
-        match get_unique_path(&text_dir, &filename, &data) {
-            UniquePathResult::New(dest) => {
-                if let Err(e) = std::fs::write(&dest, &data) {
-                    pb.println(format!("    Failed to write text asset '{}': {}", dest.display(), e));
-                    false
-                } else {
-                    true
-                }
-            }
-            UniquePathResult::Exists => true,
-        }
+        write_unique(&text_dir, &filename, &data, "text asset", pb)
     } else {
         false
     }
@@ -442,18 +439,7 @@ fn extract_audioclip(
     } else {
         output_dir.join("AudioClip")
     };
-    let _ = std::fs::create_dir_all(&audio_dir);
-    match get_unique_path(&audio_dir, &filename, &audio_data) {
-        UniquePathResult::New(dest) => {
-            if let Err(e) = std::fs::write(&dest, &audio_data) {
-                pb.println(format!("    Failed to write AudioClip '{}': {}", dest.display(), e));
-                false
-            } else {
-                true
-            }
-        }
-        UniquePathResult::Exists => true,
-    }
+    write_unique(&audio_dir, &filename, &audio_data, "AudioClip", pb)
 }
 
 fn extract_font(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log, fallback: &str) -> bool {
@@ -464,17 +450,7 @@ fn extract_font(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log, fa
     };
     let filename = format!("{}.{}", common::file_stem(&name, fallback), crate::classes::font::extension(data));
     let font_dir = if by_file { output_dir.to_path_buf() } else { output_dir.join("Font") };
-    let _ = std::fs::create_dir_all(&font_dir);
-    match get_unique_path(&font_dir, &filename, data) {
-        UniquePathResult::New(dest) => match std::fs::write(&dest, data) {
-            Ok(()) => true,
-            Err(e) => {
-                pb.println(format!("    Failed to write Font '{}': {}", dest.display(), e));
-                false
-            }
-        },
-        UniquePathResult::Exists => true,
-    }
+    write_unique(&font_dir, &filename, data, "Font", pb)
 }
 
 fn extract_videoclip(
@@ -500,17 +476,7 @@ fn extract_videoclip(
         format!("{}{}", sanitized_base, dot_ext)
     };
     let video_dir = if by_file { output_dir.to_path_buf() } else { output_dir.join(folder) };
-    let _ = std::fs::create_dir_all(&video_dir);
-    match get_unique_path(&video_dir, &filename, &video_data) {
-        UniquePathResult::New(dest) => match std::fs::write(&dest, &video_data) {
-            Ok(()) => true,
-            Err(e) => {
-                pb.println(format!("    Failed to write video '{}': {}", dest.display(), e));
-                false
-            }
-        },
-        UniquePathResult::Exists => true,
-    }
+    write_unique(&video_dir, &filename, &video_data, "video", pb)
 }
 
 fn extract_shader(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log, fallback: &str) -> bool {
@@ -530,18 +496,7 @@ fn extract_shader(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log, 
         } else {
             output_dir.join("Shader")
         };
-        let _ = std::fs::create_dir_all(&shader_dir);
-        match get_unique_path(&shader_dir, &filename, &data) {
-            UniquePathResult::New(dest) => {
-                if let Err(e) = std::fs::write(&dest, &data) {
-                    pb.println(format!("    Failed to write Shader '{}': {}", dest.display(), e));
-                    false
-                } else {
-                    true
-                }
-            }
-            UniquePathResult::Exists => true,
-        }
+        write_unique(&shader_dir, &filename, &data, "Shader", pb)
     } else {
         false
     }
@@ -581,10 +536,7 @@ fn dump_asset_as_json(
     };
     let _ = std::fs::create_dir_all(&target_dir);
     if let Ok(json_str) = serde_json::to_string_pretty(&json_val) {
-        match get_unique_path(&target_dir, &filename, json_str.as_bytes()) {
-            UniquePathResult::New(dest) => std::fs::write(&dest, json_str).is_ok(),
-            UniquePathResult::Exists => true,
-        }
+        write_unique_file(&target_dir, &filename, json_str.as_bytes()).is_ok()
     } else {
         false
     }
