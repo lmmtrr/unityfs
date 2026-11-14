@@ -18,7 +18,7 @@ fn main() {
     for a in &args[1..] {
         collect(Path::new(a), &mut files);
     }
-    let options = ExportOptions { by_file: std::env::var("FLAT").is_err(), metadata: false, objects: None };
+    let options = ExportOptions { by_file: std::env::var("FLAT").is_err(), metadata: false, objects: None, dependencies: Vec::new() };
     let t = std::time::Instant::now();
     let mut objects = 0;
     for f in &files {

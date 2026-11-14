@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use crate::assets::AssetManager;
 use crate::classes::TryFromUnityValue;
@@ -9,7 +10,14 @@ use crate::export_common::{self as common, PosePartData};
 pub struct ExportOptions {
     pub by_file: bool,
     pub metadata: bool,
-    pub objects: Option<Vec<(String, i64)>>,
+    pub objects: Option<HashMap<String, HashSet<i64>>>,
+    pub dependencies: Vec<PathBuf>,
+}
+
+impl ExportOptions {
+    fn wants(&self, file: &str, path_id: i64) -> bool {
+        self.objects.as_ref().is_none_or(|o| o.get(file).is_some_and(|ids| ids.contains(&path_id)))
+    }
 }
 
 struct Log;
@@ -26,7 +34,16 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
         .file_stem()
         .unwrap_or_else(|| std::ffi::OsStr::new("bundle"))
         .to_string_lossy();
-    let asset_manager = AssetManager::open_path(file_path).map_err(|e| format!("{}: {}", file_path.display(), e))?;
+    let mut asset_manager = AssetManager::open_path(file_path).map_err(|e| format!("{}: {}", file_path.display(), e))?;
+    let own: HashSet<String> = asset_manager.files.keys().cloned().collect();
+    let wants_sprites = asset_manager.files.iter().any(|(name, sf)| sf.objects.iter().any(|o| o.class_id == 213 && options.wants(name, o.path_id)));
+    if wants_sprites {
+        for dep in &options.dependencies {
+            if let Err(e) = asset_manager.add_dependency(dep) {
+                eprintln!("[{}]     Warning: dependency not loaded: {}", file_stem, e);
+            }
+        }
+    }
     let bundle_output_dir = if options.by_file {
         out_dir.join(file_stem.as_ref())
     } else {
@@ -37,12 +54,12 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
     let moc_stem = std::sync::Mutex::new(None);
     let mut count = 0;
     let mut sprites = crate::classes::sprite::SpriteAtlases::open(&asset_manager);
-    for (asset_name, sf) in &asset_manager.files {
+    for (asset_name, sf) in asset_manager.files.iter().filter(|(name, _)| own.contains(*name)) {
         let mut objects: Vec<_> = sf.objects.iter().collect();
         objects.sort_by_key(|o| o.class_id == 213);
         for obj in objects {
             let class_id = obj.class_id;
-            if options.objects.as_ref().is_some_and(|o| !o.iter().any(|(f, p)| f == asset_name && *p == obj.path_id)) {
+            if !options.wants(asset_name, obj.path_id) {
                 continue;
             }
             let supported = match class_id {

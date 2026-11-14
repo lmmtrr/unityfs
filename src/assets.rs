@@ -66,6 +66,19 @@ impl AssetManager {
         Ok(manager)
     }
 
+    pub fn add_dependency(&mut self, path: &Path) -> Result<(), String> {
+        let other = std::panic::catch_unwind(|| Self::open_path(path)).map_err(|_| format!("{}: parser panicked", path.display()))??;
+        for (name, file) in other.files {
+            if !self.files.contains_key(&name) {
+                self.add_file(name, file);
+            }
+        }
+        for (name, data) in other.raw_files {
+            self.raw_files.entry(name).or_insert(data);
+        }
+        Ok(())
+    }
+
     pub fn add_serialized_file(&mut self, name: String, data: ByteSource) {
         let mut reader = Reader { data, pos: 0, endian: Endian::Big, unity_version: UnityVersion::default() };
         let sf = SerializedFile::read(&mut reader);
