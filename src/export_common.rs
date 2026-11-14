@@ -396,8 +396,23 @@ pub(crate) fn criware_blobs(value: &UnityValue, key: &str, out: &mut Vec<(String
     }
 }
 
+const RESERVED_NAMES: &[&str] = &["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"];
+
+const MAX_NAME_CHARS: usize = 200;
+
+pub(crate) fn safe_file_name(name: &str) -> String {
+    let replaced: String = name.chars().take(MAX_NAME_CHARS).map(|c| if c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') { '_' } else { c }).collect();
+    let trimmed = replaced.trim().trim_end_matches(['.', ' ']);
+    let stem = trimmed.split('.').next().unwrap_or_default().to_ascii_uppercase();
+    if RESERVED_NAMES.contains(&stem.as_str()) { format!("_{}", trimmed) } else { trimmed.to_string() }
+}
+
+pub(crate) fn file_stem(name: &str, fallback: &str) -> String {
+    Some(safe_file_name(name)).filter(|s| !s.is_empty()).unwrap_or_else(|| fallback.to_string())
+}
+
 pub(crate) fn criware_filename(base: &str, key: &str, ext: &str) -> String {
-    let key = key.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
+    let key = safe_file_name(key);
     if key.is_empty() { format!("{}.{}", base, ext) } else { format!("{}_{}.{}", base, key, ext) }
 }
 

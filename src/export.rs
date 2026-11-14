@@ -12,6 +12,7 @@ pub struct ExportOptions {
     pub metadata: bool,
     pub objects: Option<HashMap<String, HashSet<i64>>>,
     pub dependencies: Vec<PathBuf>,
+    pub mono_behaviour_json: bool,
 }
 
 impl ExportOptions {
@@ -79,15 +80,16 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
                     continue;
                 }
             };
+            let fallback = format!("{}_{}", t_name.to_lowercase(), path_id);
             let success = match class_id {
-                28 => extract_texture2d(&unity_value, &sf.unity_version, sf.target_platform, &bundle_output_dir, &asset_manager, flat, pb),
-                49 => extract_text_asset(&unity_value, &bundle_output_dir, flat, pb),
-                213 => extract_sprite(&unity_value, asset_name, &mut sprites, &bundle_output_dir, pb),
-                83 => extract_audioclip(&unity_value, &bundle_output_dir, &asset_manager, asset_name, flat, pb),
-                128 => extract_font(&unity_value, &bundle_output_dir, flat, pb),
-                48 => extract_shader(&unity_value, &bundle_output_dir, flat, pb),
-                329 => extract_videoclip(&unity_value, &bundle_output_dir, &asset_manager, "VideoClip", flat, pb),
-                152 => extract_videoclip(&unity_value, &bundle_output_dir, &asset_manager, "MovieTexture", flat, pb),
+                28 => extract_texture2d(&unity_value, &sf.unity_version, sf.target_platform, &bundle_output_dir, &asset_manager, flat, pb, &fallback),
+                49 => extract_text_asset(&unity_value, &bundle_output_dir, flat, pb, &fallback),
+                213 => extract_sprite(&unity_value, asset_name, &mut sprites, &bundle_output_dir, pb, &fallback),
+                83 => extract_audioclip(&unity_value, &bundle_output_dir, &asset_manager, asset_name, flat, pb, &fallback),
+                128 => extract_font(&unity_value, &bundle_output_dir, flat, pb, &fallback),
+                48 => extract_shader(&unity_value, &bundle_output_dir, flat, pb, &fallback),
+                329 => extract_videoclip(&unity_value, &bundle_output_dir, &asset_manager, "VideoClip", flat, pb, &fallback),
+                152 => extract_videoclip(&unity_value, &bundle_output_dir, &asset_manager, "MovieTexture", flat, pb, &fallback),
                 114 => {
                     let success = extract_monobehaviour(
                         &unity_value,
@@ -99,6 +101,7 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
                         pb,
                         &pose_parts,
                         &moc_stem,
+                        options.mono_behaviour_json,
                     );
                     if options.metadata {
                         dump_asset_as_json(class_id, t_name, &unity_value, &bundle_output_dir, flat, path_id);
@@ -180,6 +183,7 @@ fn extract_monobehaviour(
     pb: &Log,
     pose_parts: &std::sync::Mutex<Vec<PosePartData>>,
     moc_stem: &std::sync::Mutex<Option<String>>,
+    json: bool,
 ) -> bool {
     let name = match val.get("m_Name") {
         Some(UnityValue::String(s)) if !s.is_empty() => s.clone(),
@@ -193,10 +197,7 @@ fn extract_monobehaviour(
     } else {
         format!("monobehaviour_{}", obj.path_id)
     };
-    let sanitized_base = base_name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-' && c != '.', "");
-    if sanitized_base.is_empty() {
-        return false;
-    }
+    let sanitized_base = common::file_stem(&base_name, &format!("monobehaviour_{}", obj.path_id));
     let mut blobs = Vec::new();
     common::criware_blobs(val, "", &mut blobs);
     if !blobs.is_empty() {
@@ -209,22 +210,29 @@ fn extract_monobehaviour(
         }
         return true;
     }
-    let Some((data, kind)) = common::monobehaviour_content(val, asset_manager, asset_name, obj) else { return false };
+    let monobehaviour_dir = if by_file { output_dir.to_path_buf() } else { output_dir.join("MonoBehaviour") };
+    let Some((data, kind)) = common::monobehaviour_content(val, asset_manager, asset_name, obj) else {
+        if !json {
+            return false;
+        }
+        let Ok(json) = serde_json::to_vec_pretty(&unity_value_to_json(val)) else { return false };
+        return write_unique(&monobehaviour_dir, &format!("{}.json", sanitized_base), &json, "MonoBehaviour JSON", pb);
+    };
     let final_name = common::content_filename(&sanitized_base, &data, kind);
     let final_data = common::finalize_content(&final_name, data);
     if final_name.ends_with(".moc3") {
         *moc_stem.lock().unwrap() = Some(common::moc_stem(&sanitized_base));
     }
-    let monobehaviour_dir = if by_file { output_dir.to_path_buf() } else { output_dir.join("MonoBehaviour") };
     write_unique(&monobehaviour_dir, &final_name, &final_data, "MonoBehaviour asset", pb)
 }
 
-fn extract_text_asset(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log) -> bool {
+fn extract_text_asset(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log, fallback: &str) -> bool {
     let name = match val.get("m_Name") {
         Some(UnityValue::String(s)) if !s.is_empty() => s.clone(),
         _ => "text_asset".to_string(),
     };
-    let name = Some(crate::extractor::sanitized_base_name(&name)).filter(|n| !n.trim_matches('.').is_empty()).unwrap_or_else(|| "text_asset".to_string());
+    let base = Path::new(&name).file_name().map_or_else(|| name.clone(), |f| f.to_string_lossy().to_string());
+    let name = common::file_stem(&base, fallback);
     let content = match val.get("m_Script") {
         Some(UnityValue::String(s)) => Some(s.as_bytes().to_vec()),
         Some(UnityValue::Bytes(b)) => Some(b.clone()),
@@ -344,6 +352,7 @@ fn extract_texture2d(
     asset_manager: &AssetManager,
     by_file: bool,
     pb: &Log,
+    fallback: &str,
 ) -> bool {
     let name = match val.get("m_Name") {
         Some(UnityValue::String(s)) if !s.is_empty() => s.clone(),
@@ -376,12 +385,7 @@ fn extract_texture2d(
                 return false;
             }
         };
-        let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
-        let filename = if safe_name.is_empty() {
-            "texture.png".to_string()
-        } else {
-            format!("{}.png", safe_name)
-        };
+        let filename = format!("{}.png", common::file_stem(&name, fallback));
         let texture_dir = if by_file {
             output_dir.to_path_buf()
         } else {
@@ -394,7 +398,7 @@ fn extract_texture2d(
     }
 }
 
-fn extract_sprite(val: &UnityValue, asset_name: &str, sprites: &mut crate::classes::sprite::SpriteAtlases, output_dir: &Path, pb: &Log) -> bool {
+fn extract_sprite(val: &UnityValue, asset_name: &str, sprites: &mut crate::classes::sprite::SpriteAtlases, output_dir: &Path, pb: &Log, fallback: &str) -> bool {
     let name = match val.get("m_Name") {
         Some(UnityValue::String(s)) if !s.is_empty() => s.clone(),
         _ => "sprite".to_string(),
@@ -410,8 +414,7 @@ fn extract_sprite(val: &UnityValue, asset_name: &str, sprites: &mut crate::class
             return false;
         }
     };
-    let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
-    let filename = if safe_name.is_empty() { "sprite.png".to_string() } else { format!("{}.png", safe_name) };
+    let filename = format!("{}.png", common::file_stem(&name, fallback));
     write_unique(output_dir, &filename, &png, "sprite", pb)
 }
 
@@ -422,6 +425,7 @@ fn extract_audioclip(
     file_name: &str,
     by_file: bool,
     pb: &Log,
+    fallback: &str,
 ) -> bool {
     let name = match val.get("m_Name") {
         Some(UnityValue::String(s)) if !s.is_empty() => s.clone(),
@@ -432,12 +436,7 @@ fn extract_audioclip(
         return false;
     }
     let extension = crate::classes::audioclip::extension(&audio_data);
-    let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
-    let filename = if safe_name.is_empty() {
-        format!("audio.{}", extension)
-    } else {
-        format!("{}.{}", safe_name, extension)
-    };
+    let filename = format!("{}.{}", common::file_stem(&name, fallback), extension);
     let audio_dir = if by_file {
         output_dir.to_path_buf()
     } else {
@@ -457,14 +456,13 @@ fn extract_audioclip(
     }
 }
 
-fn extract_font(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log) -> bool {
+fn extract_font(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log, fallback: &str) -> bool {
     let Some(data) = crate::classes::font::font_data(val) else { return false };
     let name = match val.get("m_Name") {
         Some(UnityValue::String(s)) if !s.is_empty() => s.clone(),
         _ => "font".to_string(),
     };
-    let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
-    let filename = format!("{}.{}", if safe_name.is_empty() { "font" } else { &safe_name }, crate::classes::font::extension(data));
+    let filename = format!("{}.{}", common::file_stem(&name, fallback), crate::classes::font::extension(data));
     let font_dir = if by_file { output_dir.to_path_buf() } else { output_dir.join("Font") };
     let _ = std::fs::create_dir_all(&font_dir);
     match get_unique_path(&font_dir, &filename, data) {
@@ -486,6 +484,7 @@ fn extract_videoclip(
     folder: &str,
     by_file: bool,
     pb: &Log,
+    fallback: &str,
 ) -> bool {
     let video_data = crate::classes::videoclip::video_bytes(val, asset_manager);
     if video_data.is_empty() {
@@ -494,10 +493,8 @@ fn extract_videoclip(
     let ext = crate::classes::videoclip::extension(&video_data, val);
     let name = val.get("m_Name").and_then(UnityValue::as_str).unwrap_or("");
     let dot_ext = format!(".{}", ext);
-    let sanitized_base = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
-    let filename = if sanitized_base.is_empty() {
-        format!("video{}", dot_ext)
-    } else if sanitized_base.ends_with(&dot_ext) {
+    let sanitized_base = common::file_stem(name, fallback);
+    let filename = if sanitized_base.ends_with(&dot_ext) {
         sanitized_base
     } else {
         format!("{}{}", sanitized_base, dot_ext)
@@ -516,7 +513,7 @@ fn extract_videoclip(
     }
 }
 
-fn extract_shader(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log) -> bool {
+fn extract_shader(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log, fallback: &str) -> bool {
     let name = match val.get("m_Name") {
         Some(UnityValue::String(s)) if !s.is_empty() => s.clone(),
         _ => "shader".to_string(),
@@ -527,12 +524,7 @@ fn extract_shader(val: &UnityValue, output_dir: &Path, by_file: bool, pb: &Log) 
         _ => None,
     };
     if let Some(data) = content {
-        let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
-        let filename = if safe_name.is_empty() {
-            "shader.shader".to_string()
-        } else {
-            format!("{}.shader", safe_name)
-        };
+        let filename = format!("{}.shader", common::file_stem(&name, fallback));
         let shader_dir = if by_file {
             output_dir.to_path_buf()
         } else {
@@ -568,7 +560,7 @@ fn dump_asset_as_json(
         _ => type_name.to_lowercase(),
     };
     let json_val = unity_value_to_json(val);
-    let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '_' && c != '-', "");
+    let safe_name = common::safe_file_name(&name);
     let filename = if safe_name.is_empty() {
         format!("{}_{}_{}.json", type_name.to_lowercase(), class_id, path_id)
     } else {
