@@ -9,7 +9,7 @@ use crate::export_common::{self as common, PosePartData};
 pub struct ExportOptions {
     pub by_file: bool,
     pub metadata: bool,
-    pub classes: Option<Vec<i32>>,
+    pub objects: Option<Vec<(String, i64)>>,
 }
 
 struct Log;
@@ -42,7 +42,7 @@ pub fn export_bundle_file(file_path: &Path, out_dir: &Path, options: &ExportOpti
         objects.sort_by_key(|o| o.class_id == 213);
         for obj in objects {
             let class_id = obj.class_id;
-            if options.classes.as_ref().is_some_and(|c| !c.contains(&class_id)) {
+            if options.objects.as_ref().is_some_and(|o| !o.iter().any(|(f, p)| f == asset_name && *p == obj.path_id)) {
                 continue;
             }
             let supported = match class_id {
