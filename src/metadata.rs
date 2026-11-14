@@ -152,11 +152,18 @@ impl Metadata {
 
     pub fn object_name(&self, entry: &MetadataFile, obj: &ObjectReader) -> Option<String> {
         let sf = &entry.file;
-        let first_field = obj.serialized_type.as_ref()?.nodes.iter().find(|n| n.m_Level == 1)?;
+        let fields: Vec<&str> = obj.serialized_type.as_ref()?.nodes.iter().filter(|n| n.m_Level == 1).take(4).map(|n| n.m_Name.as_str()).collect();
+        let offset = if fields.first() == Some(&"m_Name") {
+            0
+        } else if obj.class_id == 114 && fields.get(2) == Some(&"m_Script") && fields.get(3) == Some(&"m_Name") {
+            if obj.version >= 14 { 28 } else { 20 }
+        } else {
+            usize::MAX
+        };
         let name = if obj.class_id == 1 {
             self.read_object(entry, obj, obj.byte_size).ok()?.get("m_Name")?.as_str()?.to_string()
-        } else if first_field.m_Name == "m_Name" {
-            let b = self.read_range(entry, obj.byte_start as u64, obj.byte_size.min(4 + 512) as u64).ok()?;
+        } else if offset != usize::MAX && offset + 4 <= obj.byte_size {
+            let b = self.read_range(entry, (obj.byte_start + offset) as u64, (obj.byte_size - offset).min(4 + 512) as u64).ok()?;
             let len = b.get(..4)?.try_into().ok().map(|h| match sf.endian {
                 Endian::Big => u32::from_be_bytes(h),
                 Endian::Little => u32::from_le_bytes(h),
@@ -170,6 +177,19 @@ impl Metadata {
 
     pub fn object_names(&self, entry: &MetadataFile, class_id: i32) -> Vec<String> {
         entry.file.objects.iter().filter(|o| o.class_id == class_id).filter_map(|o| self.object_name(entry, o)).collect()
+    }
+
+    pub fn container_objects(&self, entry: &MetadataFile) -> Vec<(String, i64)> {
+        let Some(ab) = entry.file.objects.iter().find(|o| o.class_id == 142) else { return Vec::new() };
+        let Ok(v) = self.read_object(entry, ab, ab.byte_size) else { return Vec::new() };
+        let Some(UnityValue::Array(items)) = v.get("m_Container") else { return Vec::new() };
+        items
+            .iter()
+            .filter_map(|it| match (it.get("first"), it.get("second").and_then(|s| s.get("asset"))) {
+                (Some(UnityValue::String(path)), Some(UnityValue::PPtr { file_id: 0, path_id })) => Some((path.clone(), *path_id)),
+                _ => None,
+            })
+            .collect()
     }
 
     pub fn main_asset_name(&self, entry: &MetadataFile) -> Option<String> {
